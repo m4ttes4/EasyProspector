@@ -87,7 +87,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         model = BaseModel(config)
 
         # Prevent 50 nodes from printing the same table simultaneously
-        if getattr(config, "verbose", False) and rank == 0:
+        if getattr(config, "verbose", False): #and rank == 0:
             show_model(model.model_params)
 
         # 3. SPS Setup
