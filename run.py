@@ -11,6 +11,17 @@ from prospect.utils.obsutils import fix_obs
 from prospect.models import PolySpecModel
 from prospect.fitting import fit_model, lnprobfn
 from prospect.io import write_results as writer
+from rich.logging import RichHandler
+
+
+# TODO non forzare V1 nel file h5 
+
+logging.basicConfig(
+    level="NOTSET",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)],
+)
 
 
 try:
@@ -20,23 +31,22 @@ try:
 except ImportError:
     HAS_MPI = False
 
+# logger = logging.getLogger("rich")
 logger = logging.getLogger(__name__)
-
 
 def setup_logging(config: FitConfig, rank: int, galaxy_name: str = "main"):
     """
     Configures logging. If called multiple times, resets previous logs
     so each galaxy gets a clean, independent log file.
     """
+    # MODIFICA QUI: ottieni il VERO root logger omettendo il nome
     root_logger = logging.getLogger()
 
     # 1. CLEAR PREVIOUS HANDLERS
-    # If Node 0 moves from galaxy A to galaxy B, we must close A's file
-    # and open B's to prevent mixed logs.
+    # Ora questo rimuoverà correttamente il RichHandler del terminale
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
-    # Format the log to include the Rank, so we know which node is speaking
     log_format = logging.Formatter(
         f"%(asctime)s - [Rank {rank}] - %(levelname)s - %(message)s"
     )
@@ -45,19 +55,16 @@ def setup_logging(config: FitConfig, rank: int, galaxy_name: str = "main"):
     # 2. IF LOGGING TO FILE
     if getattr(config, "logging_to_file", False):
         os.makedirs(config.log_folder, exist_ok=True)
-        # Use the actual galaxy name passed to the function
         log_file_path = os.path.join(config.log_folder, f"{galaxy_name}.log")
 
-        # 'w' overwrites the file if it already exists (useful for reruns)
         file_handler = logging.FileHandler(log_file_path, mode="w")
         file_handler.setFormatter(log_format)
         root_logger.addHandler(file_handler)
 
     # 3. OTHERWISE PRINT TO SCREEN
     else:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(log_format)
-        root_logger.addHandler(console_handler)
+        # Se non loggi su file, reinserisci il RichHandler che hai appena cancellato
+        root_logger.addHandler(RichHandler(rich_tracebacks=True))
 
 
 def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
@@ -70,6 +77,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         output_path = os.path.join(config.out_folder, f"{galaxy_name}.h5")
 
         logger.info(f"Starting processing for file: {config.file}")
+        logger.info(f"Save file path set to {os.path.abspath(output_path)}")
 
         # 1. Data Setup
         data = GalaxyDataManager(config)
