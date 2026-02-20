@@ -9,7 +9,6 @@ try:
 except ImportError:
     observate = None
 
-# Inizializza il logger per questo modulo
 logger = logging.getLogger(__name__)
 
 
@@ -18,9 +17,7 @@ class GalaxyDataManager:
         self.config = config
 
         if not self.config.file:
-            raise ValueError(
-                "Errore: 'file' non è definito nella configurazione."
-            )
+            raise ValueError("Error: 'file' is not defined in the configuration.")
 
         self.filepath = self.config.file
         self.version = getattr(self.config, "version", None) or "V1"
@@ -30,27 +27,27 @@ class GalaxyDataManager:
         self.metadata: Optional[Dict[str, Any]] = None
 
     def load_data(self):
-        """Carica i dati e avvia la validazione."""
+        """Load data and start validation."""
         if not os.path.exists(self.filepath):
-            logger.error(f"File non trovato: {self.filepath}")
-            raise FileNotFoundError(f"Il file dati non esiste: {self.filepath}")
+            logger.error(f"File not found: {self.filepath}")
+            raise FileNotFoundError(f"Data file does not exist: {self.filepath}")
 
-        logger.info(f"Apertura del file HDF5: {self.filepath}")
+        logger.info(f"Opening HDF5 file: {self.filepath}")
 
         with h5py.File(self.filepath, "r") as h5_file:
             if self.version not in h5_file:
-                logger.error(f"Versione '{self.version}' mancante nel file.")
+                logger.error(f"Version '{self.version}' missing in the file.")
                 raise KeyError(
-                    f"Versione '{self.version}' non trovata in {self.filepath}."
+                    f"Version '{self.version}' not found in {self.filepath}."
                 )
 
-            logger.debug(f"Accesso al gruppo della versione: {self.version}")
+            logger.debug(f"Accessing version group: {self.version}")
             version_group = h5_file[self.version]
 
-            # --- Lettura Fotometria ---
+            # --- Photometry ---
             if self.config.use_photometry:
                 if "Photometry" in version_group:
-                    logger.info("Estrazione dati fotometrici in corso...")
+                    logger.info("Extracting photometric data...")
                     self.photometry = self._extract_to_memory(
                         version_group["Photometry"]
                     )
@@ -58,36 +55,36 @@ class GalaxyDataManager:
                     self._build_photometric_filters()
                 else:
                     logger.warning(
-                        "Fotometria richiesta dal config, ma non presente nel file HDF5."
+                        "Photometry requested by config, but not found in the HDF5 file."
                     )
 
-            # --- Lettura Spettroscopia ---
+            # --- Spectroscopy ---
             if self.config.use_spectroscopy:
                 if "Spectroscopy" in version_group:
-                    logger.info("Estrazione dati spettroscopici in corso...")
+                    logger.info("Extracting spectroscopic data...")
                     self.spectroscopy = self._extract_to_memory(
                         version_group["Spectroscopy"]
                     )
                     self._validate_spectroscopy()
                 else:
                     logger.warning(
-                        "Spettroscopia richiesta dal config, ma non presente nel file HDF5."
+                        "Spectroscopy requested by config, but not found in the HDF5 file."
                     )
 
-            # --- Lettura Metadati ---
+            # --- Metadata ---
             if "Metadata" in version_group:
-                logger.info("Estrazione metadati in corso...")
+                logger.info("Extracting metadata...")
                 self.metadata = self._extract_to_memory(version_group["Metadata"])
-                logger.debug(f"Metadati trovati: {list(self.metadata.keys())}")
+                logger.debug(f"Metadata found: {list(self.metadata.keys())}")
 
                 self._update_config_from_metadata()
             else:
-                logger.debug("Nessun gruppo 'Metadata' trovato nel file.")
+                logger.debug("No 'Metadata' group found in the file.")
 
-        logger.info("Caricamento e validazione dati completati con successo.")
+        logger.info("Data loading and validation completed successfully.")
 
     def _extract_to_memory(self, h5_object) -> Dict[str, Any]:
-        """Converte ricorsivamente i dataset HDF5 in dict di array numpy in RAM."""
+        """Recursively convert HDF5 datasets into a dictionary of numpy arrays in RAM."""
         data_dict = {}
         if isinstance(h5_object, h5py.Group):
             for key, item in h5_object.items():
@@ -100,56 +97,54 @@ class GalaxyDataManager:
         return data_dict
 
     def _validate_photometry(self):
-        """Controlla la consistenza della fotometria e applica filtri opzionali."""
+        """Check photometry consistency and apply optional filters."""
         if not self.photometry:
             return
 
-        logger.debug("Avvio validazione fotometria e generazione maschera...")
+        logger.debug("Starting photometry validation and mask generation...")
         req_keys = ["flux", "flux_err", "filters"]
         for k in req_keys:
             if k not in self.photometry:
-                logger.error(f"Fotometria corrotta: chiave '{k}' mancante.")
-                raise ValueError(f"Dati fotometrici corrotti: manca la chiave '{k}'.")
+                logger.error(f"Corrupted photometry: missing key '{k}'.")
+                raise ValueError(f"Corrupted photometric data: missing key '{k}'.")
 
         flux = self.photometry["flux"]
         flux_err = self.photometry["flux_err"]
         n_elements = len(flux)
 
         if self.config.use_mask and "mask" in self.photometry:
-            logger.debug("Utilizzo della maschera fotometrica dal file HDF5.")
+            logger.debug("Using photometric mask from the HDF5 file.")
             mask = np.array(self.photometry["mask"], dtype=bool)
             if len(mask) != n_elements:
                 raise ValueError(
-                    f"Lunghezza mask fotometrica ({len(mask)}) diversa dai dati ({n_elements})."
+                    f"Photometric mask length ({len(mask)}) differs from data length ({n_elements})."
                 )
         else:
-            logger.debug("Creazione maschera fotometrica di default.")
+            logger.debug("Creating default photometric mask.")
             mask = np.ones(n_elements, dtype=bool)
 
         if self.config.filter_photo:
-            logger.debug("Applicazione filtri autonomi per NaN e Inf sulla fotometria.")
+            logger.debug("Applying NaN and Inf filters to photometry.")
             mask &= np.isfinite(flux)
             mask &= np.isfinite(flux_err)
             mask &= flux_err > 0
 
         self.photometry["mask"] = mask
         logger.debug(
-            f"Maschera fotometrica creata: {mask.sum()}/{n_elements} pixel validi."
+            f"Photometric mask created: {mask.sum()}/{n_elements} valid pixels."
         )
 
     def _validate_spectroscopy(self):
-        """Controlla la consistenza della spettroscopia e applica filtri opzionali."""
+        """Check spectroscopy consistency and apply optional filters."""
         if not self.spectroscopy:
             return
 
-        logger.debug("Avvio validazione spettroscopia e generazione maschera...")
+        logger.debug("Starting spectroscopy validation and mask generation...")
         req_keys = ["wavelength", "flux", "flux_err"]
         for k in req_keys:
             if k not in self.spectroscopy:
-                logger.error(f"Spettroscopia corrotta: chiave '{k}' mancante.")
-                raise ValueError(
-                    f"Dati spettroscopici corrotti: manca la chiave '{k}'."
-                )
+                logger.error(f"Corrupted spectroscopy: missing key '{k}'.")
+                raise ValueError(f"Corrupted spectroscopic data: missing key '{k}'.")
 
         wave = self.spectroscopy["wavelength"]
         flux = self.spectroscopy["flux"]
@@ -157,20 +152,18 @@ class GalaxyDataManager:
         n_elements = len(flux)
 
         if self.config.use_mask and "mask" in self.spectroscopy:
-            logger.debug("Utilizzo della maschera spettroscopica dal file HDF5.")
+            logger.debug("Using spectroscopic mask from the HDF5 file.")
             mask = np.array(self.spectroscopy["mask"], dtype=bool)
             if len(mask) != n_elements:
                 raise ValueError(
-                    f"Lunghezza mask spettroscopica ({len(mask)}) diversa dai dati ({n_elements})."
+                    f"Spectroscopic mask length ({len(mask)}) differs from data length ({n_elements})."
                 )
         else:
-            logger.debug("Creazione maschera spettroscopica di default.")
+            logger.debug("Creating default spectroscopic mask.")
             mask = np.ones(n_elements, dtype=bool)
 
         if self.config.filter_spec:
-            logger.debug(
-                "Applicazione filtri autonomi per NaN e Inf sulla spettroscopia."
-            )
+            logger.debug("Applying NaN and Inf filters to spectroscopy.")
             mask &= np.isfinite(flux)
             mask &= np.isfinite(flux_err)
             mask &= flux_err > 0
@@ -179,22 +172,22 @@ class GalaxyDataManager:
 
         self.spectroscopy["mask"] = mask
         logger.debug(
-            f"Maschera spettroscopica creata: {mask.sum()}/{n_elements} pixel validi."
+            f"Spectroscopic mask created: {mask.sum()}/{n_elements} valid pixels."
         )
 
     def _build_photometric_filters(self):
-        """Converte i nomi dei filtri dal file H5 in oggetti sedpy.observate.Filter."""
+        """Convert filter names from the H5 file into sedpy.observate.Filter objects."""
         if not self.photometry:
             return
 
         if observate is None:
-            logger.error("La libreria 'sedpy' non è installata ma è richiesta.")
+            logger.error("The 'sedpy' library is not installed but is required.")
             raise ImportError(
-                "La libreria 'sedpy' non è installata, ma è richiesta per la fotometria."
+                "The 'sedpy' library is not installed, but is required for photometry."
             )
 
         raw_filters = self.photometry["filters"]
-        logger.debug(f"Costruzione oggetti sedpy per {len(raw_filters)} filtri...")
+        logger.debug(f"Building sedpy objects for {len(raw_filters)} filters...")
 
         filter_names = []
         for f in raw_filters:
@@ -206,49 +199,46 @@ class GalaxyDataManager:
         try:
             filters_list = [observate.Filter(f) for f in filter_names]
         except Exception as e:
-            logger.error(f"Errore di sedpy durante il caricamento dei filtri: {e}")
+            logger.error(f"sedpy error while loading filters: {e}")
             raise ValueError(
-                f"Errore in sedpy: impossibile trovare uno o più filtri. Dettagli: {e}"
+                f"Error in sedpy: unable to find one or more filters. Details: {e}"
             )
 
         filters_wave = np.array([flt.wave_effective for flt in filters_list])
 
         self.photometry["sedpy_filters"] = filters_list
         self.photometry["wave_effective"] = filters_wave
-        logger.debug("Filtri sedpy costruiti correttamente.")
-    
+        logger.debug("sedpy filters built successfully.")
+
     def _update_config_from_metadata(self):
         """
-        Aggiorna l'oggetto FitConfig usando i metadati letti dal file HDF5,
-        rispettando le priorità della riga di comando.
+        Update the FitConfig object using metadata read from the HDF5 file,
+        respecting CLI priorities.
         """
         if not self.metadata:
             return
 
         if "redshift" in self.metadata:
-            # Il nostro metodo _extract_to_memory salva i dataset singoli dentro la chiave "data"
             z_file = self.metadata["redshift"]
             if isinstance(z_file, dict) and "data" in z_file:
                 z_file = z_file["data"]
 
-            # Assicuriamoci che sia un float (HDF5 a volte restituisce array di 1 elemento o float32)
             try:
                 z_file = float(z_file)
             except (ValueError, TypeError):
-                logger.warning(f"Valore di redshift nel file non valido: {z_file}")
+                logger.warning(f"Invalid redshift value in file: {z_file}")
                 return
 
-            # Applica il redshift SOLO se l'utente non lo ha forzato da terminale (cioè se è None)
             if self.config.redshift is None:
                 self.config.redshift = z_file
                 logger.info(
-                    f"Redshift aggiornato automaticamente dai metadati: z = {self.config.redshift:.4f}"
+                    f"Redshift automatically updated from metadata: z = {self.config.redshift:.4f}"
                 )
             else:
                 logger.info(
-                    f"Redshift CLI (z={self.config.redshift}) mantenuto. Ignorato z={z_file:.4f} del file."
+                    f"CLI redshift (z={self.config.redshift}) retained. Ignoring file z={z_file:.4f}."
                 )
-    
+
     def to_dict(self):
         observation = {
             "wavelength": self.spectroscopy["wavelength"],

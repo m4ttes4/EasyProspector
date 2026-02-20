@@ -4,18 +4,15 @@ from prospect.models import priors, transforms
 from prospect.models.templates import TemplateLibrary, adjust_continuity_agebins
 
 import logging
-import numpy as np
-from typing import Dict, Any
-
 import rich.box
 from rich.table import Table
 from rich.console import Console
 
-# Inizializziamo il logger per questo modulo
 logger = logging.getLogger(__name__)
 
 
 def format_dict(d: Dict) -> str:
+    """Helper to format dictionaries into a readable string."""
     lines = []
     for key, value in d.items():
         if isinstance(value, float):
@@ -27,9 +24,8 @@ def format_dict(d: Dict) -> str:
 
 
 def format_long_list(value: Any, max_items_per_line: int = 3) -> str:
-    """Formatta liste lunghe su più righe."""
+    """Formats long lists or arrays across multiple lines."""
     if isinstance(value, (list, np.ndarray)) and len(value) > max_items_per_line:
-        # Assicuriamoci che sia una lista per fare lo slicing in modo sicuro
         if isinstance(value, np.ndarray):
             val_list = value.tolist()
         else:
@@ -45,10 +41,9 @@ def format_long_list(value: Any, max_items_per_line: int = 3) -> str:
 
 def show_model(model_params: Dict[str, Any]):
     """
-    Tabula i parametri di un modello di Prospector usando Rich.
-    Stampa la tabella in modo pulito e sicuro usando il modulo logging globale.
+    Tabulates Prospector model parameters using Rich.
+    Prints the table cleanly and safely using the global logging module.
     """
-    # 1. Creazione della tabella (la logica rimane identica alla tua)
     table = Table(
         title="Prospector Model Parameters",
         header_style="bold cyan",
@@ -71,12 +66,12 @@ def show_model(model_params: Dict[str, Any]):
 
         dep_str = dep.__name__ if dep else "N/A"
 
-        # Rich interpreterà questi tag se la console ha i colori attivi,
-        # altrimenti li rimuoverà in automatico se stampiamo su file.
+        # Rich parses these tags if the console has colors enabled,
+        # otherwise it strips them automatically for file logging.
         is_free_display = "[bold green]True[/]" if is_free else "[bold red]False[/]"
 
         if not isinstance(prior, (str, type(None))):
-            # Aggiunto controllo sicuro per evitare crash se l'oggetto prior non ha .params
+            # Safe check to prevent crashes if the prior object lacks .params
             if hasattr(prior, "params"):
                 param_str = format_dict(prior.params) + "\n"
             else:
@@ -94,11 +89,8 @@ def show_model(model_params: Dict[str, Any]):
             key, init_value_display, is_free_display, str(prior), dep_str, shape
         )
 
-    # 2. Cattura dell'output e Logging (LA MAGIA AVVIENE QUI)
-
-    # Creiamo una console "virtuale".
-    # Usare color_system=None è FONDAMENTALE quando si logga su file,
-    # altrimenti il file .log si riempie di codici illeggibili come "\033[92mTrue\033[0m"
+    # Create a "virtual" console.
+    # color_system=None is CRUCIAL when logging to a file to prevent ANSI escape codes.
     console = Console(width=120, color_system=None)
 
     with console.capture() as capture:
@@ -106,14 +98,13 @@ def show_model(model_params: Dict[str, Any]):
 
     table_str = capture.get()
 
-    # Passiamo la stringa gigante al nostro logger.
-    # Mettiamo "\n" all'inizio così la tabella parte su una riga pulita sotto il timestamp del log.
+    # Prepend a newline so the table starts cleanly below the log timestamp
     logger.info("\n" + table_str)
-    
+
+
 class ProspectorModelBuilder:
     """
-    Classe base per costruire i parametri del modello Prospector.
-    Include funzionalità di visualizzazione con Rich.
+    Base class to build Prospector model parameters.
     """
 
     def __init__(self):
@@ -122,106 +113,56 @@ class ProspectorModelBuilder:
     def get_params(self) -> Dict[str, Any]:
         return self.model_params
 
-    # --- Metodi di Visualizzazione (Rich) ---
-
-    @staticmethod
-    def _format_dict(d: Dict) -> str:
-        """Helper statico: Formatta dizionari (es. parametri prior)."""
-        lines = []
-        for key, value in d.items():
-            if isinstance(value, float):
-                formatted_value = f"{value:.4f}"
-            else:
-                formatted_value = str(value)
-            lines.append(f"{key} -> {formatted_value}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_long_list(value: Any, max_items_per_line: int = 3) -> str:
-        """Helper statico: Formatta liste o array lunghi su più righe."""
-        if isinstance(value, (list, np.ndarray)) and len(value) > max_items_per_line:
-            # Converte in lista se è numpy
-            if isinstance(value, np.ndarray):
-                val_list = value.tolist()
-            else:
-                val_list = value
-
-            lines = [
-                ", ".join(map(str, val_list[i : i + max_items_per_line]))
-                for i in range(0, len(val_list), max_items_per_line)
-            ]
-            return "\n".join(lines)
-        return str(value)
-
-    def show_summary(self):
-        pass
-        # tabula_modello_prospector_rich(self.model_params)
-
 
 class BaseModel(ProspectorModelBuilder):
     """
-    Costruisce un modello con storia di formazione stellare non parametrica (Continuity SFH).
-    Gestisce configurazioni complesse come nebular emission, dust, smoothing e outlier.
+    Builds a model with a non-parametric Star Formation History (Continuity SFH).
+    Handles complex configurations like nebular emission, dust, smoothing, and outliers.
     """
 
     def __init__(self, config):
-        
         super().__init__()
         self.config = config
 
-
-        # 1. Base SFH (Continuity)
         self._setup_sfh()
-
-        # 2. Parametri Fisici (Metallicity, IMF, etc.)
         self._setup_physical_params()
-
-        # 3. Polvere
         self._setup_dust()
 
-        # 4. Nebular Emission (Linee)
         if self.config.add_nebular:
             self._setup_nebular()
 
-        # 5. Calibrazione Spettroscopica (Smoothing, Normalizzazione)
         if self.config.use_spectroscopy:
             self._setup_spectroscopy()
 
-        # 6. Modelli di Outlier (Noise modeling)
         self._setup_outliers()
 
-        # 7. Marginalizzazione Linee (Avanzato)
         if getattr(self.config, "margin_elines", False):
             self._setup_line_marginalization()
 
     def _setup_sfh(self):
-        """Imposta i parametri per la Continuity SFH (bin di massa e tempo)."""
-        # Carica il template base
+        """Sets up parameters for the Continuity SFH (mass and time bins)."""
         self.model_params.update(TemplateLibrary["continuity_sfh"])
 
-        # Redshift (fondamentale per calcolare l'età dell'universo)
         z = self.config.redshift if self.config.redshift is not None else 0.0
 
-        # Regola i bin temporali in base all'età dell'universo a z
-        # Nota: tuniv=13.7 è un'approssimazione sicura, ma usare cosmo.age(z) è meglio se disponibile
+        # Adjust time bins based on the universe age at z
+        # Note: tuniv=13.7 is a broad approximation
         self.model_params.update(
             adjust_continuity_agebins(
                 self.model_params, tuniv=13.7, nbins=self.config.nbins
             )
         )
 
-        # Massa Totale
+        # Total Mass
         self.model_params["logmass"] = {
             "N": 1,
             "isfree": True,
             "init": 10.5,
             "units": "Solar masses formed",
-            "prior": priors.TopHat(
-                mini=6.0, maxi=13.0
-            ),  # Ho allargato un po' il mini per sicurezza
+            "prior": priors.TopHat(mini=6.0, maxi=13.0),
         }
 
-        # Masse per Bin (Calcolate da logmass + ratios)
+        # Bin Masses (Calculated from logmass + ratios)
         self.model_params["mass"] = {
             "N": self.config.nbins,
             "isfree": False,
@@ -237,7 +178,6 @@ class BaseModel(ProspectorModelBuilder):
                 "isfree": True,
                 "init": z,
                 "units": "redshift",
-                # Prior stretto attorno al valore fotometrico/spettroscopico iniziale
                 "prior": priors.ClippedNormal(
                     mean=z, sigma=0.05, mini=z - 0.5, maxi=z + 0.5
                 ),
@@ -251,17 +191,16 @@ class BaseModel(ProspectorModelBuilder):
             }
 
     def _setup_physical_params(self):
-        """Metallicità e IMF."""
-        # Metallicità Stellare
+        """Stellar Metallicity and IMF."""
         self.model_params["logzsol"] = {
             "N": 1,
             "isfree": True,
             "init": -0.3,
             "units": r"$\log (Z/Z_\odot)$",
-            "prior": priors.TopHat(mini=-2.0, maxi=0.5),  # Allargato leggermente maxi
+            "prior": priors.TopHat(mini=-2.0, maxi=0.5),
         }
 
-        # IMF (Chabrier = 1)
+        # IMF (1 = Chabrier)
         self.model_params["imf_type"] = {
             "N": 1,
             "isfree": False,
@@ -270,14 +209,14 @@ class BaseModel(ProspectorModelBuilder):
         }
 
     def _setup_dust(self):
-        """Configurazione attenuazione e emissione polvere."""
-        # Attenuazione Continuum (Dust2)
+        """Dust attenuation and emission configuration."""
+        # Continuum Attenuation (Dust2 / Calzetti+)
         self.model_params["dust_type"] = {
             "N": 1,
             "isfree": False,
             "init": 4,
             "units": "FSPS index",
-        }  # Calzetti+
+        }
 
         self.model_params["dust2"] = {
             "N": 1,
@@ -309,31 +248,32 @@ class BaseModel(ProspectorModelBuilder):
                 "prior": priors.ClippedNormal(mini=0.0, maxi=2.0, mean=1.0, sigma=0.3),
             }
 
-        # Emissione Polvere (IR)
+        # Dust Emission (IR)
         if self.config.add_duste:
             self.model_params.update(TemplateLibrary["dust_emission"])
-            # Sovrascrivi priors se necessario
             self.model_params["duste_gamma"]["isfree"] = True
             self.model_params["duste_gamma"]["prior"] = priors.TopHat(
                 mini=0.0, maxi=1.0
             )
+
             self.model_params["duste_qpah"]["isfree"] = True
             self.model_params["duste_qpah"]["prior"] = priors.TopHat(
                 mini=0.5, maxi=10.0
             )
+
             self.model_params["duste_umin"]["isfree"] = True
             self.model_params["duste_umin"]["prior"] = priors.TopHat(
                 mini=0.1, maxi=25.0
             )
 
     def _setup_nebular(self):
-        """Emissioni Nebulari (HII regions)."""
+        """Nebular Emissions (HII regions)."""
         self.model_params.update(TemplateLibrary["nebular"])
 
-        # Default: non includere linee nello spettro stellare (le gestiamo noi o FSPS)
+        # Default: do not include lines directly in stellar spectrum
         self.model_params["nebemlineinspec"] = {"N": 1, "isfree": False, "init": False}
 
-        # Fisica del gas
+        # Gas physics
         self.model_params["gas_logz"] = {
             "N": 1,
             "isfree": True,
@@ -346,21 +286,19 @@ class BaseModel(ProspectorModelBuilder):
             "init": -2.0,
             "prior": priors.TopHat(mini=-4.0, maxi=-1.0),
         }
-        # Dispersione velocità linee intrinseche
+        # Intrinsic line velocity dispersion
         self.model_params["eline_sigma"] = {
             "N": 1,
             "isfree": True,
             "init": 150.0,
             "units": "km/s",
-            "prior": priors.TopHat(
-                mini=50, maxi=500
-            ),  # 3000 era forse troppo per linee nebular
+            "prior": priors.TopHat(mini=50, maxi=500),
         }
 
     def _setup_spectroscopy(self):
-        """Parametri strumentali: Smoothing e Polinomi di calibrazione."""
+        """Instrumental parameters: Smoothing and Calibration polynomials."""
 
-        # 1. Smoothing Spettrale (Sigma Smooth)
+        # 1. Spectral Smoothing (Sigma Smooth)
         self.model_params.update(TemplateLibrary["spectral_smoothing"])
         self.model_params["sigma_smooth"] = {
             "N": 1,
@@ -370,35 +308,34 @@ class BaseModel(ProspectorModelBuilder):
             "prior": priors.TopHat(mini=200.0, maxi=2000.0),
         }
 
-        # 2. Ottimizzazione Continuum (Polinomi)
+        # 2. Continuum Optimization (Polynomials)
         self.model_params.update(TemplateLibrary["optimize_speccal"])
 
-        # Normalizzazione Spettro (Scaling factor)
+        # Spectrum Normalization (Scaling factor)
         self.model_params["spec_norm"] = {
             "N": 1,
             "isfree": True,
             "init": 1.0,
-            "prior": priors.Normal(
-                mean=1.0, sigma=0.2
-            ),  # Sigma 0.1 un po' stretto a volte
+            "prior": priors.Normal(mean=1.0, sigma=0.2),
         }
 
         # Jitter (Noise floor underestimation)
         self.model_params["spec_jitter"] = {
             "N": 1,
             "isfree": True,
-            "init": 1.0,  # Init 1.0 = add 1*sigma error?
-            "prior": priors.TopHat(mini=0.0, maxi=5.0),  # jitter >= 0 di solito
+            "init": 1.0,
+            "prior": priors.TopHat(mini=0.0, maxi=5.0),
         }
-        # Polinomio
+
+        # Polynomial Order
         self.model_params["polyorder"] = {
             "N": 1,
             "isfree": False,
             "init": 10,
-        }  # 10 ordine alto, occhio all'overfitting
+        }
 
     def _setup_outliers(self):
-        """Modelli di mixture per gestire dati 'cattivi' (outliers)."""
+        """Mixture models to handle 'bad' data (outliers)."""
 
         if self.config.fit_outliers_spec and self.config.use_spectroscopy:
             self.model_params["f_outlier_spec"] = {
@@ -417,8 +354,8 @@ class BaseModel(ProspectorModelBuilder):
             self.model_params["f_outlier_phot"] = {
                 "N": 1,
                 "isfree": True,
-                "init": 0.00,  # Inizia a 0
-                "prior": priors.TopHat(mini=0, maxi=0.1),  # Max 10% fotometria outlier
+                "init": 0.00,
+                "prior": priors.TopHat(mini=0, maxi=0.1),
             }
             self.model_params["nsigma_outlier_phot"] = {
                 "N": 1,
@@ -428,29 +365,25 @@ class BaseModel(ProspectorModelBuilder):
 
     def _setup_line_marginalization(self):
         """
-        Logica complessa per marginalizzare le linee di emissione.
-        Richiede 'lines' nel config e dati osservati validi.
+        Complex logic to marginalize emission lines.
+        Requires 'lines' in config and valid observed data.
         """
         if not self.config.add_nebular:
             raise ValueError("Marginalization requires add_nebular=True")
 
-        # Recupera le linee da fittare dalla config
-        # Assumiamo che config.lines sia un dict: {'[OIII]': 5007, ...}
+        # Retrieve the lines to fit from config
         lines_dict = getattr(self.config, "lines", {})
         if not lines_dict:
-            print("Warning: margin_elines=True but no lines found in config.")
+            logger.warning("margin_elines=True but no lines found in config.")
             return
 
         to_fit_names = list(lines_dict.keys())
-
-        # --- Qui potresti inserire la logica di controllo pixel (da tuo codice) ---
-        # Per ora prendiamo tutto quello che c'è nella config
         valid_lines = to_fit_names
 
         if not valid_lines:
             return
 
-        # Carica template marginalization
+        # Load marginalization template
         self.model_params.update(TemplateLibrary["nebular_marginalization"])
 
         self.model_params["elines_to_fit"] = {
@@ -459,7 +392,7 @@ class BaseModel(ProspectorModelBuilder):
             "init": np.array(valid_lines),
         }
 
-        # Ampiezza prior (sigma velocità per queste linee)
+        # Amplitude prior (velocity sigma for these lines)
         self.model_params["eline_sigma"] = {
             "N": 1,
             "isfree": True,
@@ -467,8 +400,7 @@ class BaseModel(ProspectorModelBuilder):
             "prior": priors.TopHat(mini=50.0, maxi=1000.0),
         }
 
-        # Fit Redshift specifico per le linee? (Offset rispetto alle stelle)
-        # Nota: nel tuo config originale era 'fit_eline_redshift'
+        # Specific Redshift fit for lines (Offset relative to stars)
         if getattr(self.config, "fit_eline_redshift", False):
             n_lines = len(valid_lines)
             self.model_params["fit_eline_redshift"] = {
@@ -480,8 +412,6 @@ class BaseModel(ProspectorModelBuilder):
             self.model_params["eline_delta_zred"] = {
                 "N": n_lines,
                 "isfree": True,
-                "init": np.zeros(n_lines),  # Delta z inizialmente 0
-                "prior": priors.TopHat(
-                    mini=-0.01, maxi=0.01
-                ),  # Piccolo shift consentito
+                "init": np.zeros(n_lines),
+                "prior": priors.TopHat(mini=-0.01, maxi=0.01),
             }

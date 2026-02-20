@@ -10,6 +10,8 @@ from sps import ProspectorSPSBuilder
 from prospect.utils.obsutils import fix_obs
 from prospect.models import PolySpecModel
 from prospect.fitting import fit_model, lnprobfn
+from prospect.io import write_results as writer
+
 
 try:
     from mpi4py import MPI
@@ -23,61 +25,72 @@ logger = logging.getLogger(__name__)
 
 def setup_logging(config: FitConfig, rank: int, galaxy_name: str = "main"):
     """
-    Configura il logging. Se chiamato più volte, resetta i log precedenti.
-    In questo modo ogni galassia ha il suo file pulito e indipendente.
+    Configures logging. If called multiple times, resets previous logs
+    so each galaxy gets a clean, independent log file.
     """
     root_logger = logging.getLogger()
 
-    # 1. SVUOTA GLI HANDLER PRECEDENTI!
-    # Se il nodo 0 passa dalla galassia A alla galassia B, dobbiamo chiudere
-    # il file della galassia A e aprire quello della galassia B.
+    # 1. CLEAR PREVIOUS HANDLERS
+    # If Node 0 moves from galaxy A to galaxy B, we must close A's file
+    # and open B's to prevent mixed logs.
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
-    # Formattiamo il log includendo il Rank, così a schermo capiamo chi parla
+    # Format the log to include the Rank, so we know which node is speaking
     log_format = logging.Formatter(
         f"%(asctime)s - [Rank {rank}] - %(levelname)s - %(message)s"
     )
     root_logger.setLevel(logging.DEBUG if config.verbose else logging.INFO)
 
-    # 2. SE LOGGING SU FILE
+    # 2. IF LOGGING TO FILE
     if getattr(config, "logging_to_file", False):
         os.makedirs(config.log_folder, exist_ok=True)
-        # Usa il nome effettivo della galassia passato alla funzione
+        # Use the actual galaxy name passed to the function
         log_file_path = os.path.join(config.log_folder, f"{galaxy_name}.log")
 
-        # 'w' sovrascrive il file se esiste già (utile se rilanci lo script)
+        # 'w' overwrites the file if it already exists (useful for reruns)
         file_handler = logging.FileHandler(log_file_path, mode="w")
         file_handler.setFormatter(log_format)
         root_logger.addHandler(file_handler)
-    # 3. ALTRIMENTI SOLO A SCHERMO
+
+    # 3. OTHERWISE PRINT TO SCREEN
     else:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(log_format)
         root_logger.addHandler(console_handler)
 
 
-def run_fitting_pipeline(config, rank=0):
+def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
     """
-    Incapsula l'intero processo di fitting per una singola galassia.
+    Encapsulates the entire fitting process for a single galaxy.
     """
     try:
-        logger.info(f"Inizio elaborazione file: {config.file}")
+        # Ensure output folder exists before trying to save
+        os.makedirs(config.out_folder, exist_ok=True)
+        output_path = os.path.join(config.out_folder, f"{galaxy_name}.h5")
 
+        logger.info(f"Starting processing for file: {config.file}")
+
+        # 1. Data Setup
         data = GalaxyDataManager(config)
         data.load_data()
 
+        # 2. Model Setup
         model = BaseModel(config)
 
-        if getattr(config, "verbose", False):
+        # Prevent 50 nodes from printing the same table simultaneously
+        if getattr(config, "verbose", False) and rank == 0:
             show_model(model.model_params)
 
+        # 3. SPS Setup
         source = ProspectorSPSBuilder(config, data, model)
         sps = source.build_sps()
 
+        # 4. Fit Configuration
         obs = fix_obs(data.to_dict())
         mod = PolySpecModel(model.model_params)
 
+        # 5. Execute Fit
         output = fit_model(
             obs=obs,
             model=mod,
@@ -88,15 +101,30 @@ def run_fitting_pipeline(config, rank=0):
             **config.dynesty_kwargs,
         )
 
-        logger.info(f"Fit completato con successo per: {config.name}")
+        # 6. Save Results
+        writer.write_hdf5(
+            output_path,
+            config.to_dict(),
+            mod,
+            obs,
+            output["sampling"][0],
+            None,
+            sps=sps,
+            tsample=output["sampling"][1],
+            toptimize=0.0,
+            model_params=model.model_params,
+        )
+
+        logger.info(f"Fit successfully completed for: {config.name}")
         return output
 
     except Exception as e:
-        logger.error(f"Errore critico su {config.name}: {e}", exc_info=True)
+        logger.error(f"Critical error on {config.name}: {e}", exc_info=True)
         return None
 
 
 if __name__ == "__main__":
+    # --- 1. GLOBAL MPI SETUP ---
     if HAS_MPI:
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
@@ -106,58 +134,62 @@ if __name__ == "__main__":
         rank = 0
         size = 1
 
+    # --- 2. BASE CONFIGURATION ---
+    # Read the command line ONLY ONCE for all nodes
     base_config = FitConfig()
     modifiche_cli = base_config.update_from_cli()
 
-    # Creiamo un log temporaneo a schermo per i messaggi di boot
+    # Create a temporary screen logger for boot messages
     setup_logging(base_config, rank, galaxy_name="boot")
 
     total_targets = len(base_config.targets)
 
     if total_targets == 0:
         if rank == 0:
-            logger.error("Nessun target trovato! Fornisci --file o --file_list.")
+            logger.error("No targets found! Please provide --file or --file_list.")
         sys.exit(1)
 
     elif total_targets == 1 and size > 1:
-        # CASO A: Singolo file, engine parallelo
+        # CASE A: Single file, parallel engine
         if rank == 0:
-            logger.info("Modalità 'Singolo Fit Parallelo' rilevata.")
+            logger.info("Single Parallel Fit mode detected.")
 
-        # Estraiamo il nome del singolo file
+        # Extract the name of the single file
         gal_name = os.path.splitext(os.path.basename(base_config.targets[0]))[0]
         base_config.name = gal_name
 
         setup_logging(base_config, rank, galaxy_name=gal_name)
-        run_fitting_pipeline(base_config, rank)
+        run_fitting_pipeline(base_config, rank, galaxy_name=gal_name)
 
     else:
-        # CASO B: Batch Mode
-        # TODO 1 RISOLTO: Distribuzione gestita. Se size > total_targets, i nodi in eccesso hanno lista vuota
+        # CASE B: Batch Mode
+        # Distribution handled: if size > total_targets, excess nodes get an empty list.
         local_targets = base_config.targets[rank::size]
 
         if not local_targets:
             logger.info(
-                "Nessun target assegnato a questo nodo (N_MPI > N_Galassie). Mi metto a riposo."
+                "No targets assigned to this node (N_MPI > N_Galaxies). Standing by."
             )
             sys.exit(0)
 
         logger.info(
-            f"Assegnate {len(local_targets)} galassie su {total_targets} totali."
+            f"Assigned {len(local_targets)} galaxies out of {total_targets} total."
         )
 
         for target_path in local_targets:
             local_config = deepcopy(base_config)
 
-            # TODO 2 RISOLTO: Estraiamo il nome della galassia dal path prima di fare post_init
+            # Extract galaxy name from path before post_init
             galaxy_name = os.path.splitext(os.path.basename(target_path))[0]
 
-            # Aggiorniamo i campi del config
+            # Update config fields
             local_config.file = target_path
             local_config.name = galaxy_name
             local_config.__post_init__()
 
-            # TODO 3 RISOLTO: Configuriamo il logger in modo esclusivo per questa galassia
+            # Configure the logger exclusively for this galaxy
             setup_logging(local_config, rank, galaxy_name=galaxy_name)
 
-            run_fitting_pipeline(local_config, rank)
+            run_fitting_pipeline(local_config, rank, galaxy_name=galaxy_name)
+
+
