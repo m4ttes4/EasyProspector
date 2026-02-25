@@ -1,0 +1,216 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import SpanSelector, Button, CheckButtons
+import logging
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
+
+
+def plot_emission_lines(ax, wavelengths, flux, lines_dict):
+    """
+    Aggiunge le linee di emissione al grafico.
+    Trova il picco locale dei dati attorno alla riga e posiziona il testo
+    appena sopra, collegato da una linea tratteggiata.
+    """
+    # Filtra i dati validi per calcolare il range globale del grafico
+    valid_flux = flux[np.isfinite(flux)]
+    if len(valid_flux) == 0:
+        return
+        
+    f_min, f_max = np.nanmin(valid_flux), np.nanmax(valid_flux)
+    f_range = f_max - f_min
+    
+    # Imposta un offset dinamico per il testo (es. 5% del range totale)
+    text_offset = f_range * 0.05
+    
+    w_min, w_max = np.nanmin(wavelengths), np.nanmax(wavelengths)
+    
+    for name, ww in lines_dict.items():
+        # Estrae la lunghezza d'onda (gestisce sia la tupla che il singolo float)
+        wavelength = ww[0] if isinstance(ww, (tuple, list)) else ww
+        
+        if w_min <= wavelength <= w_max:
+            # Trova l'indice corrispondente alla lunghezza d'onda
+            idx = np.nanargmin(np.abs(wavelengths - wavelength))
+            
+            # Crea una piccola finestra di pixel (es. +/- 15 pixel) per trovare il picco locale reale
+            window_size = 15
+            idx_start = max(0, idx - window_size)
+            idx_end = min(len(flux), idx + window_size)
+            
+            local_flux = flux[idx_start:idx_end]
+            
+            # Calcola il picco locale (ignorando eventuali NaN)
+            if len(local_flux) > 0 and not np.all(np.isnan(local_flux)):
+                local_peak = np.nanmax(local_flux)
+            else:
+                local_peak = f_max  # Fallback di sicurezza
+            
+            # Disegna una linea verticale leggera dal fondo del grafico fino al picco locale
+            ax.vlines(
+                wavelength,
+                ymin=f_min,
+                ymax=local_peak + (text_offset * 0.5),
+                color="indianred",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.7,
+                zorder=1
+            )
+            
+            # Posiziona il testo appena sopra il picco locale
+            ax.text(
+                wavelength,
+                local_peak + text_offset,  
+                name,
+                color="darkred",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="medium",
+                rotation=90,
+                zorder=2
+            )
+
+
+def interactive_masking(config, data_dict):
+    """
+    Funzione per mascherare interattivamente lo spettro di una galassia.
+    
+    Parametri
+    ---------
+    config : FitConfig
+        Oggetto di configurazione da cui estrarre redshift e dizionario delle linee.
+    data_dict : dict
+        Dizionario generato da GalaxyDataManager.to_dict() contenente 'wavelength', 
+        'spectrum', e opzionalmente 'mask'.
+        
+    Ritorna
+    -------
+    mask : np.ndarray
+        La nuova maschera booleana aggiornata.
+    lines_to_fit : dict
+        Il dizionario delle righe di emissione selezionate per la marginalizzazione.
+    """
+    # 1. Estrazione dati da config e data_dict
+    z = config.redshift if config.redshift is not None else 0.0
+    line_dict = config.lines if hasattr(config, "lines") and config.lines else {}
+    
+    wavelengths = data_dict["wavelength"]
+    flux = data_dict["spectrum"]
+    n_elements = len(flux)
+    
+    # Inizializza la maschera con quella esistente nel data_dict, se presente
+    if "mask" in data_dict and data_dict["mask"] is not None:
+        initial_mask = mask = np.ones(n_elements, dtype=bool)#np.copy(data_dict["mask"])
+    else:
+        initial_mask = np.ones_like(wavelengths, dtype=bool)
+        
+    mask = np.copy(initial_mask)
+    selected_regions = []
+
+    # 2. Setup della figura con estetica "formale"
+    fig = plt.figure(figsize=(12, 6))
+    gs = fig.add_gridspec(1, 2, width_ratios=[4, 1], wspace=0.1)
+    ax = fig.add_subplot(gs[0])
+    ax_check = fig.add_subplot(gs[1])
+    
+    # Spazio per il pulsante in basso
+    plt.subplots_adjust(bottom=0.25)
+    
+    # Sposta a rest-frame
+    ww = wavelengths / (1 + z)
+
+    # Dati da visualizzare
+    masked_flux = np.where(mask, flux, np.nan)       # Dati validi
+    visible_flux = np.where(mask, np.nan, flux)      # Dati mascherati
+
+    (original_line,) = ax.plot(ww, masked_flux, color="k", linewidth=1.2, label="Valid Spectrum")
+    (masked_line,) = ax.plot(ww, visible_flux, color="crimson", alpha=0.7, linewidth=1.2, label="Masked Regions")
+
+    # 3. Formattazione formale dell'asse dello spettro
+    ax.set_xlabel(r"Rest-frame Wavelength ($\mathrm{\AA}$)", fontsize=14)
+    ax.set_ylabel(r"Flux", fontsize=14)
+    ax.set_title("Interactive Spectrum Masking", fontsize=16, weight="bold")
+    ax.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.7)
+    ax.minorticks_on()
+    ax.tick_params(axis="both", which="major", labelsize=12)
+    ax.tick_params(axis="both", which="minor", length=4, color="gray")
+    
+    # Rimuovi bordi superflui per un look più pulito
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["bottom"].set_linewidth(1.5)
+
+    # 4. Funzioni di callback per l'interattività
+    def update_plot():
+        masked_flux_update = np.where(mask, flux, np.nan)
+        visible_flux_update = np.where(mask, np.nan, flux)
+        original_line.set_ydata(masked_flux_update)
+        masked_line.set_ydata(visible_flux_update)
+        # Usa draw_idle per un rendering più efficiente
+        fig.canvas.draw_idle()
+
+    def onselect(xmin, xmax):
+        selected = (ww >= xmin) & (ww <= xmax)
+        mask[selected] = False
+        selected_regions.append((xmin, xmax))
+        update_plot()
+
+    def clear_selection(event):
+        nonlocal mask
+        # Il reset riporta la maschera allo stato originale letto da data_dict
+        mask[:] = np.copy(initial_mask)
+        selected_regions.clear()
+        update_plot()
+
+    # SpanSelector configurato con un colore in evidenza (rosso traslucido)
+    span = SpanSelector(
+        ax,
+        onselect,
+        "horizontal",
+        useblit=True,
+        props=dict(alpha=0.2, facecolor="red"),
+        interactive=True,
+    )
+
+    # Pulsante di Reset
+    ax_button = plt.axes([0.15, 0.05, 0.12, 0.06])
+    button = Button(ax_button, "Reset Mask", color='lightgray', hovercolor='0.85')
+    button.on_clicked(clear_selection)
+    
+    # 5. Creazione pannello di selezione per le righe di emissione
+    lines_to_fit = {}
+    ax_check.set_title("Emission Lines\nto Marginalize", fontsize=12, weight="bold")
+    ax_check.set_xticks([])
+    ax_check.set_yticks([])
+    ax_check.set_frame_on(False)
+    
+    if line_dict:
+        check_labels = list(line_dict.keys())
+        check_states = [False] * len(check_labels)
+        
+        # CheckButtons di default
+        check_buttons = CheckButtons(ax_check, check_labels, check_states)
+
+        def toggle_line(label):
+            if label in lines_to_fit:
+                del lines_to_fit[label]
+            else:
+                lines_to_fit[label] = line_dict[label]
+
+        check_buttons.on_clicked(toggle_line)
+        
+        # Plot delle linee (la tua funzione in utils.py)
+        plot_emission_lines(ax, ww, flux, line_dict)
+    else:
+        # Messaggio placeholder se non ci sono linee nel config
+        ax_check.text(0.5, 0.5, "No emission lines\nprovided", 
+                      ha='center', va='center', color="gray", fontsize=10)
+
+    ax.legend(loc="upper right", fontsize=12, frameon=True, framealpha=0.9)
+    
+    plt.show()
+
+    return mask, lines_to_fit

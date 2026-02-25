@@ -127,6 +127,10 @@ class BaseModel(ProspectorModelBuilder):
         self._setup_sfh()
         self._setup_physical_params()
         self._setup_dust()
+        
+        
+        if self.config.add_agn:
+            self._setup_agn()
 
         if self.config.add_nebular:
             self._setup_nebular()
@@ -138,6 +142,19 @@ class BaseModel(ProspectorModelBuilder):
 
         if getattr(self.config, "margin_elines", False):
             self._setup_line_marginalization()
+    
+    def _setup_agn(self):
+        self.model_params.update(TemplateLibrary["agn"])
+        # Rendi i parametri dell'AGN liberi in modo che Dynesty li fitti
+        self.model_params["fagn"]["isfree"] = True
+        self.model_params["agn_tau"]["isfree"] = True
+
+        # 3. (Opzionale) Aggiungi le righe di emissione dell'AGN
+        self.model_params.update(TemplateLibrary["agn_eline"])
+
+        # Rendi i parametri delle righe liberi
+        self.model_params["agn_elum"]["isfree"] = True
+        self.model_params["agn_eline_sigma"]["isfree"] = True
 
     def _setup_sfh(self):
         """Sets up parameters for the Continuity SFH (mass and time bins)."""
@@ -305,7 +322,7 @@ class BaseModel(ProspectorModelBuilder):
             "isfree": True,
             "init": 1000.0,
             "units": "km/s",
-            "prior": priors.TopHat(mini=200.0, maxi=2000.0),
+            "prior": priors.TopHat(mini=500.0, maxi=5000.0),
         }
 
         # 2. Continuum Optimization (Polynomials)
@@ -324,7 +341,7 @@ class BaseModel(ProspectorModelBuilder):
             "N": 1,
             "isfree": True,
             "init": 1.0,
-            "prior": priors.TopHat(mini=0.0, maxi=5.0),
+            "prior": priors.TopHat(mini=0.0, maxi=15.0),
         }
 
         # Polynomial Order

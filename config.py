@@ -7,6 +7,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_EMISSION_LINES = {
+        "Lyα": (1215.67,),
+        "[O II]": (3727.00,),
+        "Hβ": (4861.33,),
+        "[O III] 4959": (4958.91,),
+        "[O III] 5007": (5006.84,),
+        "Hα": (6562.82,),
+        "[N II] 6584": (6583.45,),
+        "[S II] 6716": (6716.44,),
+        "[S II] 6731": (6730.82,)
+    }
 
 @dataclass
 class FitConfig:
@@ -16,6 +27,7 @@ class FitConfig:
     out: Optional[str] = None  # Output name
     out_folder: Optional[str] = "results/out"  # Folder where results will be saved
     file_list: Optional[str] = None
+    ext: Optional[str] = None #extesion for the name
 
     name: Optional[str] = "result"
     logging_to_file: bool = False  # Default: logging to terminal/stdout
@@ -66,7 +78,10 @@ class FitConfig:
     # --- 5. Debug, Plotting, and Interactivity ---
     verbose: bool = True
     interactive: bool = False
-    lines: Dict[str, tuple] = field(default_factory=dict)
+
+    
+
+    lines: Dict[str, tuple] = field(default_factory=lambda: DEFAULT_EMISSION_LINES)
 
     def __post_init__(self):
         """Validations and automatic setup after initialization."""
@@ -137,6 +152,8 @@ class FitConfig:
         add_arg("--nbins", type=int)
         add_arg("--log_folder", type=str)
         add_arg("--z_continuous", type=int)
+        add_arg("--ext", type=str)
+
 
         # New Boolean arguments
         add_bool("use_mask", "use_mask")

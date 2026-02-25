@@ -9,10 +9,12 @@ from models import BaseModel, show_model
 from sps import ProspectorSPSBuilder
 from prospect.utils.obsutils import fix_obs
 from prospect.models import PolySpecModel
+from prospect.likelihood import NoiseModel
+from prospect.likelihood.kernels import Uncorrelated
 from prospect.fitting import fit_model, lnprobfn
 from prospect.io import write_results as writer
 from rich.logging import RichHandler
-
+from utils import interactive_masking
 
 # TODO non forzare V1 nel file h5 
 
@@ -74,6 +76,10 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
     try:
         # Ensure output folder exists before trying to save
         os.makedirs(config.out_folder, exist_ok=True)
+        
+        if config.ext is not None:
+            galaxy_name += config.ext 
+        
         output_path = os.path.join(config.out_folder, f"{galaxy_name}.h5")
 
         logger.info(f"Starting processing for file: {config.file}")
@@ -88,6 +94,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
 
         # Prevent 50 nodes from printing the same table simultaneously
         if getattr(config, "verbose", False): #and rank == 0:
+            data.show()
             show_model(model.model_params)
 
         # 3. SPS Setup
@@ -95,8 +102,19 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         sps = source.build_sps()
 
         # 4. Fit Configuration
-        obs = fix_obs(data.to_dict())
+        raw_obs = data.to_dict()
+        if config.interactive:
+            new_mask, lines = interactive_masking(config, raw_obs)
+            raw_obs["mask"] = raw_obs["mask"] & new_mask
+
+        obs = fix_obs(raw_obs)
         mod = PolySpecModel(model.model_params)
+
+        if config.use_spectroscopy:
+            jitter = Uncorrelated(parnames=["spec_jitter"])
+            noise = NoiseModel(kernels=[jitter], metric_name="unc", weight_by=["unc"])
+        else:
+            noise = None
 
         # 5. Execute Fit
         output = fit_model(
@@ -105,6 +123,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
             sps=sps,
             lnprobfn=lnprobfn,
             optimize=config.optimize,
+            noise = (noise, None),
             dynesty=True,
             **config.dynesty_kwargs,
         )
