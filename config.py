@@ -16,7 +16,8 @@ DEFAULT_EMISSION_LINES = {
         "Hα": (6562.82,),
         "[N II] 6584": (6583.45,),
         "[S II] 6716": (6716.44,),
-        "[S II] 6731": (6730.82,)
+        "[S II] 6731": (6730.82,),
+        "Na": (5895,)
     }
 
 @dataclass
@@ -68,9 +69,9 @@ class FitConfig:
 
     dynesty_kwargs: Dict[str, Any] = field(
         default_factory=lambda: {
-            "nested_nlive_init": 300,
+            "nested_nlive_init": 3000,
             "nested_sample": "rwalk",
-            "nested_target_n_effective": 300,
+            "nested_target_n_effective": 3000,
             "nested_dlogz_init": 0.01,
         }
     )

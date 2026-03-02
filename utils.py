@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import SpanSelector, Button, CheckButtons
 import logging
+
+import plotext as plttxt
+
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
 
@@ -214,3 +217,67 @@ def interactive_masking(config, data_dict):
     plt.show()
 
     return mask, lines_to_fit
+
+
+def plot_unicode_spectrum(obs, model_spec=None):
+    # 1. Estrazione dati dal dizionario obs
+    wave = obs["wavelength"]
+    spec = obs["spectrum"]
+    mask = obs.get("mask", np.ones_like(wave, dtype=bool))
+
+    # 2. Rimuoviamo preventivamente i NaN per evitare crash di Plotext
+    valid_data = ~np.isnan(spec)
+    wave = wave[valid_data]
+    spec = spec[valid_data]
+    mask = mask[valid_data]
+
+    # Separazione pixel buoni (True) e mascherati (False)
+    good_wave, good_spec = wave[mask], spec[mask]
+    bad_wave, bad_spec = wave[~mask], spec[~mask]
+
+    plttxt.clear_figure()
+
+    # 3. Calcolo dei limiti intelligenti (Smart Y-limits)
+    # 2. Calcolo dei limiti intelligenti
+    if len(good_spec) > 0:
+        y_min = np.percentile(good_spec, 1)
+        y_max = np.percentile(good_spec, 99)
+
+        margin = (y_max - y_min) * 0.1
+        if margin == 0:
+            margin = 0.1 * abs(y_min) if y_min != 0 else 1e-10
+
+        y_bottom = y_min - margin
+        y_top = y_max + margin
+        plttxt.ylim(y_bottom, y_top)
+
+        # --- NOVITÀ: Notazione scientifica forzata sull'asse Y ---
+        # Creiamo 5 tacche equidistanti
+        y_ticks = np.linspace(y_bottom, y_top, 5)
+        # Le formattiamo in notazione scientifica (es. "1.50e-08")
+        y_labels = [f"{val:.2e}" for val in y_ticks]
+        # Le applichiamo al grafico
+        plttxt.yticks(y_ticks, y_labels)
+
+    plttxt.theme("clear")
+
+    # 4. Plotting (RIMOSSO marker="x" per evitare l'IndexError)
+    if len(bad_spec) > 0:
+        # Usa plttxt.scatter ma con il marker di default (hd/braille)
+        plttxt.scatter(bad_wave, bad_spec, color="cyan", label="Masked/Bad")
+
+    if len(good_spec) > 0:
+        # plttxt.plot(good_wave, good_spec, color="white", label="Observed Data")
+        plttxt.scatter(good_wave, good_spec, color="white", label="Observed Data")
+
+    if model_spec is not None:
+        # Assicuriamoci che anche il modello sia filtrato dai NaN
+        mod_valid = model_spec[valid_data]
+        plttxt.plot(wave, mod_valid, color="yellow", label="Best Fit Model")
+
+    plttxt.title("Prospector Fit - Osservazione vs Modello")
+    plttxt.xlabel("Wavelength (Angstrom)")
+    plttxt.ylabel("Flux (Maggies)")
+
+    plttxt.plotsize(100, 30)
+    plttxt.show()

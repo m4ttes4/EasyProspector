@@ -8,13 +8,15 @@ from data_reader import GalaxyDataManager
 from models import BaseModel, show_model
 from sps import ProspectorSPSBuilder
 from prospect.utils.obsutils import fix_obs
-from prospect.models import PolySpecModel
+from prospect.models import PolySpecModel, AGNSpecModel
 from prospect.likelihood import NoiseModel
 from prospect.likelihood.kernels import Uncorrelated
 from prospect.fitting import fit_model, lnprobfn
 from prospect.io import write_results as writer
 from rich.logging import RichHandler
-from utils import interactive_masking
+from utils import interactive_masking, plot_unicode_spectrum
+import h5py
+
 
 # TODO non forzare V1 nel file h5 
 
@@ -97,6 +99,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
             data.show()
             show_model(model.model_params)
 
+
         # 3. SPS Setup
         source = ProspectorSPSBuilder(config, data, model)
         sps = source.build_sps()
@@ -106,9 +109,18 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         if config.interactive:
             new_mask, lines = interactive_masking(config, raw_obs)
             raw_obs["mask"] = raw_obs["mask"] & new_mask
+            ## TMP save new mask in data
+            # f = h5py.File(f"tmp/{galaxy_name}.h5", "w")
+            # with h5py.File(f"tmp/{galaxy_name}.h5", "w") as f:
+            #     f.create_dataset("mask", data=raw_obs["mask"] & new_mask)
+        
+        
 
         obs = fix_obs(raw_obs)
         mod = PolySpecModel(model.model_params)
+        # mod = AGNSpecModel(model.model_params)
+        if getattr(config, "verbose", False):  # and rank == 0:
+            plot_unicode_spectrum(raw_obs)
 
         if config.use_spectroscopy:
             jitter = Uncorrelated(parnames=["spec_jitter"])

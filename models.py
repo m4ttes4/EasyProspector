@@ -154,7 +154,14 @@ class BaseModel(ProspectorModelBuilder):
 
         # Rendi i parametri delle righe liberi
         self.model_params["agn_elum"]["isfree"] = True
-        self.model_params["agn_eline_sigma"]["isfree"] = True
+        self.model_params["agn_eline_sigma"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 5000,
+            "prior": priors.TopHat(mini=3000, maxi=9000),
+        }
+        # self.modelparams["agn_eline_sigma"]["init"] = 5000
+        # self.model_params["agn_eline_sigma"]["isfree"] = True
 
     def _setup_sfh(self):
         """Sets up parameters for the Continuity SFH (mass and time bins)."""
