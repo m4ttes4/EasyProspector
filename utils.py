@@ -281,3 +281,200 @@ def plot_unicode_spectrum(obs, model_spec=None):
 
     plttxt.plotsize(100, 30)
     plttxt.show()
+
+
+def plot_spectrum(
+    wavelengths,
+    flux,
+    flux_error,
+    redshift=0,
+    mask=None,
+    title="Galaxy Spectrum",
+    # Parametri opzionali per la fotometria
+    phot_wavelengths=None,
+    phot_flux=None,
+    phot_flux_error=None,
+    phot_label="Photometry",
+    phot_marker="o",
+    phot_color="red",
+    phot_alpha=1.0,
+    # Parametri opzionali per personalizzare linee di assorbimento
+    absorption_lines=None,
+    absorption_line_color="gray",
+    absorption_line_style="--",
+    absorption_line_alpha=0.7,
+):
+    """
+    Plotta lo spettro di una galassia con bande di errore e punti fotometrici opzionali,
+    corretti per lo spostamento verso il rosso.
+
+    Se viene fornita una maschera booleana, il codice suddivide lo spettro in segmenti contigui:
+      - I segmenti dove la maschera è True vengono plottati con il colore principale (dalla colormap "plasma")
+      - I segmenti dove la maschera è False vengono plottati in blue
+    """
+    import matplotlib.pyplot as plt
+
+    # Funzione helper per ottenere i segmenti contigui dati gli indici in cui la maschera assume un certo valore target
+    def get_segments(mask, target):
+        segments = []
+        current_seg = []
+        for i, val in enumerate(mask):
+            if val == target:
+                # Se l'indice corrente non è contiguo a quello precedente, inizia un nuovo segmento
+                if current_seg and i != current_seg[-1] + 1:
+                    segments.append(current_seg)
+                    current_seg = []
+                current_seg.append(i)
+            else:
+                if current_seg:
+                    segments.append(current_seg)
+                    current_seg = []
+        if current_seg:
+            segments.append(current_seg)
+        return segments
+
+    # Determina quali dati sono disponibili
+    has_spectrum = (
+        wavelengths is not None and flux is not None and flux_error is not None
+    )
+    has_photometry = phot_wavelengths is not None and phot_flux is not None
+
+    # Correggi le linee di assorbimento per lo spostamento verso il rosso (se definite)
+    if absorption_lines is not None:
+        corrected_lines = {
+            line: wl * (1 + redshift) for line, wl in absorption_lines.items()
+        }
+    else:
+        corrected_lines = {}
+
+    # Scegli la colormap e definisci i colori:
+    cmap = plt.colormaps["plasma"]
+    main_color = cmap(0.4)  # colore per i dati con mask True
+    error_color = cmap(0.7)  # colore per la banda d'errore dei dati validi
+    masked_color = "blue"  # colore per i segmenti con mask False
+
+    plt.figure(figsize=(10, 6))
+
+    if has_spectrum:
+        # Se è definita una maschera, suddividi i dati in segmenti contigui
+        if mask is not None:
+            segments_true = get_segments(mask, True)
+            segments_false = get_segments(mask, False)
+
+            # Plot dei segmenti con mask True (dati "validi")
+            first_true = True
+            for seg in segments_true:
+                seg_w = wavelengths[seg]
+                seg_flux = flux[seg]
+                seg_flux_err = flux_error[seg]
+                if first_true:
+                    plt.plot(
+                        seg_w, seg_flux, label="Flux", color=main_color, linewidth=2
+                    )
+                    plt.fill_between(
+                        seg_w,
+                        seg_flux - seg_flux_err,
+                        seg_flux + seg_flux_err,
+                        color=error_color,
+                        alpha=0.5,
+                        label="Flux Error",
+                    )
+                    first_true = False
+                else:
+                    plt.plot(seg_w, seg_flux, color=main_color, linewidth=2)
+                    plt.fill_between(
+                        seg_w,
+                        seg_flux - seg_flux_err,
+                        seg_flux + seg_flux_err,
+                        color=error_color,
+                        alpha=0.5,
+                    )
+
+            # Plot dei segmenti con mask False (dati "mascherati")
+            first_false = True
+            for seg in segments_false:
+                seg_w = wavelengths[seg]
+                seg_flux = flux[seg]
+                seg_flux_err = flux_error[seg]
+                if first_false:
+                    plt.plot(
+                        seg_w,
+                        seg_flux,
+                        label="Masked Flux",
+                        color=masked_color,
+                        linewidth=2,
+                    )
+                    plt.fill_between(
+                        seg_w,
+                        seg_flux - seg_flux_err,
+                        seg_flux + seg_flux_err,
+                        color=masked_color,
+                        alpha=0.5,
+                        label="Masked Flux Error",
+                    )
+                    first_false = False
+                else:
+                    plt.plot(seg_w, seg_flux, color=masked_color, linewidth=2)
+                    plt.fill_between(
+                        seg_w,
+                        seg_flux - seg_flux_err,
+                        seg_flux + seg_flux_err,
+                        color=masked_color,
+                        alpha=0.5,
+                    )
+        else:
+            # Se non viene fornita alcuna maschera, plottare lo spettro completo
+            plt.plot(wavelengths, flux, label="Flux", color=main_color, linewidth=2)
+            plt.fill_between(
+                wavelengths,
+                flux - flux_error,
+                flux + flux_error,
+                color=error_color,
+                alpha=0.5,
+                label="Flux Error",
+            )
+
+    # Plot della fotometria se disponibile
+    if has_photometry:
+        plt.errorbar(
+            phot_wavelengths,
+            phot_flux,
+            yerr=phot_flux_error,
+            fmt=phot_marker,
+            color=phot_color,
+            alpha=phot_alpha,
+            label=phot_label,
+            linestyle="none",
+            markersize=6,
+            capsize=4,
+        )
+
+    # Plot delle linee di assorbimento (se definite)
+    for line_name, wl in corrected_lines.items():
+        plt.axvline(
+            wl,
+            color=absorption_line_color,
+            linestyle=absorption_line_style,
+            linewidth=1,
+            alpha=absorption_line_alpha,
+            label=f"{line_name} ({wl:.1f} Å)",
+        )
+
+    # Etichette degli assi, titolo e formattazione del grafico
+    plt.xlabel("Wavelength (Å)", fontsize=14)
+    plt.ylabel("Flux", fontsize=14)
+    plt.title(title, fontsize=16, weight="bold", color="black")
+    plt.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.minorticks_on()
+    plt.tick_params(axis="both", which="major", labelsize=12)
+    plt.tick_params(axis="both", which="minor", length=4, color="gray")
+    plt.legend(fontsize=12, loc="best", frameon=True, framealpha=0.9)
+
+    ax = plt.gca()
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["bottom"].set_linewidth(1.5)
+
+    plt.tight_layout()
+    plt.show()

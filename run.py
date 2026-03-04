@@ -5,7 +5,7 @@ from copy import deepcopy
 
 from config import FitConfig
 from data_reader import GalaxyDataManager
-from models import BaseModel, show_model
+from models import BaseModel, show_model, ContinuitySFH
 from sps import ProspectorSPSBuilder
 from prospect.utils.obsutils import fix_obs
 from prospect.models import PolySpecModel, AGNSpecModel
@@ -14,7 +14,7 @@ from prospect.likelihood.kernels import Uncorrelated
 from prospect.fitting import fit_model, lnprobfn
 from prospect.io import write_results as writer
 from rich.logging import RichHandler
-from utils import interactive_masking, plot_unicode_spectrum
+from utils import interactive_masking, plot_spectrum
 import h5py
 
 
@@ -92,7 +92,7 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         data.load_data()
 
         # 2. Model Setup
-        model = BaseModel(config)
+        model = ContinuitySFH(config)#BaseModel(config)
 
         # Prevent 50 nodes from printing the same table simultaneously
         if getattr(config, "verbose", False): #and rank == 0:
@@ -109,18 +109,40 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         if config.interactive:
             new_mask, lines = interactive_masking(config, raw_obs)
             raw_obs["mask"] = raw_obs["mask"] & new_mask
+            logger.debug(
+                f"Spectroscopic mask created: {raw_obs['mask'].sum()}/{len(new_mask)} valid pixels."
+            )
+            # logger.info(raw_obs["maggies"])
+            # logger.info(raw_obs["maggies_unc"])
+            # logger.info(raw_obs["phot_mask"])
             ## TMP save new mask in data
             # f = h5py.File(f"tmp/{galaxy_name}.h5", "w")
             # with h5py.File(f"tmp/{galaxy_name}.h5", "w") as f:
             #     f.create_dataset("mask", data=raw_obs["mask"] & new_mask)
+        
+        if config.interactive:
+            plot_spectrum(
+                raw_obs["wavelength"],
+                raw_obs["spectrum"],
+                raw_obs["unc"],
+                mask=raw_obs["mask"],
+                phot_wavelengths=raw_obs["phot_wave"][raw_obs["phot_mask"]],
+                phot_flux=raw_obs["maggies"][raw_obs["phot_mask"]],
+                phot_flux_error=raw_obs["maggies_unc"][raw_obs["phot_mask"]],
+            )
+            # wavelengths,
+            # flux,
+            # flux_error,
+            # redshift=0,
+            # mask=None,
         
         
 
         obs = fix_obs(raw_obs)
         mod = PolySpecModel(model.model_params)
         # mod = AGNSpecModel(model.model_params)
-        if getattr(config, "verbose", False):  # and rank == 0:
-            plot_unicode_spectrum(raw_obs)
+        # if getattr(config, "verbose", False):  # and rank == 0:
+        #     plot_unicode_spectrum(raw_obs)
 
         if config.use_spectroscopy:
             jitter = Uncorrelated(parnames=["spec_jitter"])

@@ -292,6 +292,13 @@ class GalaxyDataManager:
             mask &= np.isfinite(flux)
             mask &= np.isfinite(flux_err)
             mask &= flux_err > 0
+            mask &= flux > 0
+            # phot_mask = [
+            #     True
+            #     if flux[i] > 0 or ~np.isfinite(flux[i])
+            #     else False
+            #     for i in range(len(flux))
+            # ]
 
         self.photometry["mask"] = mask
         logger.debug(

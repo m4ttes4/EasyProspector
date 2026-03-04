@@ -183,7 +183,7 @@ class BaseModel(ProspectorModelBuilder):
             "isfree": True,
             "init": 10.5,
             "units": "Solar masses formed",
-            "prior": priors.TopHat(mini=6.0, maxi=13.0),
+            "prior": priors.TopHat(mini=8.0, maxi=13.0),
         }
 
         # Bin Masses (Calculated from logmass + ratios)
@@ -275,17 +275,20 @@ class BaseModel(ProspectorModelBuilder):
         # Dust Emission (IR)
         if self.config.add_duste:
             self.model_params.update(TemplateLibrary["dust_emission"])
-            self.model_params["duste_gamma"]["isfree"] = True
+            self.model_params["duste_gamma"]["isfree"] = False
+            self.model_params["duste_gamma"]["init"] = 0.01
             self.model_params["duste_gamma"]["prior"] = priors.TopHat(
                 mini=0.0, maxi=1.0
             )
 
             self.model_params["duste_qpah"]["isfree"] = True
+            self.model_params["duste_qpah"]["init"] = 3.5
             self.model_params["duste_qpah"]["prior"] = priors.TopHat(
                 mini=0.5, maxi=10.0
             )
 
-            self.model_params["duste_umin"]["isfree"] = True
+            self.model_params["duste_umin"]["isfree"] = False
+            self.model_params["duste_umin"]["init"] = 1.0
             self.model_params["duste_umin"]["prior"] = priors.TopHat(
                 mini=0.1, maxi=25.0
             )
@@ -308,7 +311,7 @@ class BaseModel(ProspectorModelBuilder):
             "N": 1,
             "isfree": True,
             "init": -2.0,
-            "prior": priors.TopHat(mini=-4.0, maxi=-1.0),
+            "prior": priors.TopHat(mini=-2.0, maxi=0.5),
         }
         # Intrinsic line velocity dispersion
         self.model_params["eline_sigma"] = {
@@ -348,7 +351,7 @@ class BaseModel(ProspectorModelBuilder):
             "N": 1,
             "isfree": True,
             "init": 1.0,
-            "prior": priors.TopHat(mini=0.0, maxi=15.0),
+            "prior": priors.TopHat(mini=0.0, maxi=5.0),
         }
 
         # Polynomial Order
@@ -439,3 +442,365 @@ class BaseModel(ProspectorModelBuilder):
                 "init": np.zeros(n_lines),
                 "prior": priors.TopHat(mini=-0.01, maxi=0.01),
             }
+
+
+class ContinuitySFH(ProspectorModelBuilder):
+    def __init__(self, run_params, obs=None):
+        super().__init__()
+
+        fit_spec = True#run_params.get("use_spectroscopy", False)
+        add_duste = True#run_params.get("add_duste", False)
+        add_nebular = True#run_params.get("add_nebular", False)
+        has_z = True#"redshift" in run_params
+        nbins = 8#run_params.get("nbins", 12)
+        fixed_z = False#run_params.get("fixed_z", False)
+
+        fit_outliers_spec = False#run_params.get("fit_outliers_spec", False)
+        fit_ouliers_photo = False#run_params.get("fit_ouliers_photo", False)
+        add_dust1 = True#run_params.get("add_dust1", False)
+
+        smooth_type = "vel"#run_params.get("smooth_type", "vel")
+        margin_elines = False#run_params.get("margin_elines", False)
+        fit_eline_redshift = False#run_params.get("fit_eline_redshift", False)
+
+        # cosmo = Planck18
+
+        if fit_spec:
+            # --- Spectral Smoothing ---
+            self.model_params.update(TemplateLibrary["spectral_smoothing"])
+            self.model_params["sigma_smooth"] = {
+                "N": 1,
+                "init": 1000.0,
+                "isfree": True,
+                "units": "Km/s",
+                "prior": priors.TopHat(mini=200.0, maxi=2000.0),
+            }
+            # R prisma ~ 100
+            # --- Continuum Optimization ---
+            self.model_params.update(TemplateLibrary["optimize_speccal"])
+            self.model_params["polyorder"] = {"N": 1, "isfree": False, "init": 10}
+            self.model_params["spec_norm"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1,
+                "units": "f_true/f_obs",
+                "prior": priors.Normal(mean=1.0, sigma=0.1),
+            }
+            self.model_params["spec_jitter"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1,
+                "prior": priors.TopHat(mini=-0.5, maxi=5),
+            }
+
+            # This is a pixel outlier model. It helps to marginalize over
+            # poorly modeled noise, such as residual sky lines or
+            # even missing absorption lines
+            # self.model_params["smooth_type"]["init"] = smooth_type
+
+        if fit_outliers_spec:
+            self.model_params["f_outlier_spec"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 0.01,
+                "prior": priors.TopHat(mini=1e-5, maxi=0.2),
+            }
+
+            self.model_params["nsigma_outlier_spec"] = {
+                "N": 1,
+                "isfree": False,
+                "init": 50.0,
+            }
+
+        if fit_ouliers_photo:
+            self.model_params["f_outlier_phot"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 0.00,
+                "prior": priors.TopHat(mini=0, maxi=0.5),
+            }
+
+            self.model_params["nsigma_outlier_phot"] = {
+                "N": 1,
+                "isfree": False,
+                "init": 50.0,
+            }
+
+        # -----------------------
+        # --- ADDITIONALS HERE ---
+        # -----------------------
+        # because by def they can override manual instertions
+        if add_duste:
+            # --- Dust Emission ---
+            self.model_params.update(TemplateLibrary["dust_emission"])
+            self.model_params["duste_gamma"]["isfree"] = True
+            self.model_params["duste_gamma"]["init"] = 0.01
+            self.model_params["duste_gamma"]["prior"] = priors.TopHat(
+                mini=0.0, maxi=1.0
+            )
+
+            self.model_params["duste_qpah"]["isfree"] = True
+            self.model_params["duste_qpah"]["init"] = 3.5
+            self.model_params["duste_qpah"]["prior"] = priors.TopHat(
+                mini=0.5, maxi=10.0
+            )
+
+            self.model_params["duste_umin"]["isfree"] = True
+            self.model_params["duste_umin"]["init"] = 1.0
+            self.model_params["duste_umin"]["prior"] = priors.TopHat(
+                mini=0.1, maxi=25.0
+            )
+
+        if add_nebular:
+            # add_nebular
+
+            self.model_params.update(TemplateLibrary["nebular"])
+            self.model_params["nebemlineinspec"] = {
+                "N": 1,
+                "isfree": False,
+                "init": False,
+            }
+            self.model_params["eline_sigma"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 150.0,
+                "units": "km/s",
+                "prior": priors.TopHat(mini=50, maxi=3000),
+            }
+            self.model_params["gas_logz"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 0.0,
+                "units": "log Z/Zsun",
+                "prior": priors.TopHat(mini=-2, maxi=0.5),
+            }
+            self.model_params["gas_logu"] = {
+                "N": 1,
+                "isfree": True,
+                "init": -2.0,
+                "units": "Q_H/N_H",
+                "prior": priors.TopHat(mini=-4, maxi=-1),
+            }
+
+        self.model_params.update(TemplateLibrary["continuity_sfh"])
+        tuniv = 13.7  # cosmo.age(redshift).value
+        self.model_params.update(
+            adjust_continuity_agebins(self.model_params, tuniv=tuniv, nbins=nbins)
+        )
+        # nbins = 12
+        # agelims = [0.0, 7.0] + np.linspace(
+        #     start=7,
+        #     stop=np.log10((cosmo.age(z=redshift) - cosmo.age(z=50)).to("yr").value),
+        #     num=nbins,
+        # )[1:].tolist()
+        # agebins = np.array([agelims[:-1], agelims[1:]]).T
+
+        # self.model_params["agebins"] = {
+        #     "N": nbins,
+        #     "isfree": False,
+        #     "init": agebins,
+        #     "units": "log(yr)",
+        # }
+
+        # self.model_params["logsfr_ratios"] = {
+        #     "N": nbins - 1,
+        #     "isfree": True,
+        #     "init": np.full(nbins - 1, 0.0),
+        #     "prior": priors.StudentT(
+        #         mean=np.full(nbins - 1, 0.0),
+        #         scale=np.full(nbins - 1, 0.3),
+        #         df=np.full(nbins - 1, 2),
+        #     ),
+        # }
+
+        self.model_params["mass"] = {
+            "N": nbins,
+            "isfree": False,
+            "init": 1e6,  # np.array([10**6.5 for _ in range(nbins)]),
+            "units": "Solar masses formed",
+            "depends_on": transforms.logsfr_ratios_to_masses,
+        }
+
+        # --- Metallicity ---
+        self.model_params["logzsol"] = {
+            "N": 1,
+            "isfree": True,
+            "init": -0.3,
+            "units": r"$\log (Z/Z_\odot)$",
+            "prior": priors.TopHat(mini=-2, maxi=0.50),
+        }
+        if fixed_z:
+            self.model_params["logzsol"]["isfree"] = False
+
+        # --- IMF ---
+        self.model_params["imf_type"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 1,  # 1 = Chabrier
+            "units": "FSPS index",
+            "prior": None,
+        }
+
+        # --- Continuity SFH ---
+        self.model_params["logmass"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 10.5,
+            "units": "Solar masses formed",
+            "prior": priors.TopHat(mini=8.0, maxi=13.0),
+        }
+
+        # --- Dust Absorption / Emission ---
+        self.model_params["dust_type"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 4,
+            "units": "FSPS index",
+            "prior": None,
+        }
+        self.model_params["dust2"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 0.5,
+            "units": "optical depth at 5500AA",
+            "prior": priors.TopHat(mini=0.0, maxi=4.0 / 1.086),
+        }
+
+        self.model_params["dust_index"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 0.0,
+            "units": "power-law multiplication of Calzetti",
+            "prior": priors.ClippedNormal(mini=-1.5, maxi=0.4, mean=0.0, sigma=0.3),
+        }
+        if add_dust1:
+            self.model_params["dust1"] = {
+                "N": 1,
+                "isfree": False,
+                "depends_on": transforms.dustratio_to_dust1,
+                "init": 0.0,
+                "units": "optical depth towards young stars",
+                "prior": None,
+            }
+            self.model_params["dust1_fraction"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1.0,
+                "units": "ratio Dust2 to Dust1",
+                "prior": priors.ClippedNormal(mini=0.0, maxi=2.0, mean=1.0, sigma=0.3),
+            }
+
+        # --- Redshift ---
+        if has_z:
+            redshift = run_params.redshift#run_params["redshift"]
+            # print(F"\nINIT MODEL AT Z = {redshift}\n")
+            self.model_params["zred"] = {
+                "N": 1,
+                "isfree": True,
+                "init": redshift,
+                "units": "redshift",
+                "prior": priors.ClippedNormal(
+                    mini=redshift - 0.5,
+                    maxi=redshift + 0.5,
+                    mean=redshift,
+                    sigma=0.05,
+                ),
+            }
+        elif has_z is False:
+            redshift = 0.0
+            # print("\nINIT MODEL WITH Z AS FREE PARAM\n")
+            self.model_params["zred"] = {
+                "N": 1,
+                "isfree": True,
+                "init": redshift,
+                "units": "redshift",
+                "prior": priors.TopHat(mini=0.0, maxi=12),
+            }
+
+        if margin_elines:
+            if not add_nebular:
+                raise ValueError("Cannot marginalize without nebular added")
+
+            if "elines_to_fit" not in run_params:
+                raise KeyError("eline_to_fit dict is not present in run_params")
+
+            # self.model_params['gas_logu']['isfree'] = True
+            # self.model_params['gas_logz']['isfree'] = True
+
+            # self.model_params['nebemlineinspec'] = {'N': 1,
+            #                                 'isfree': False,
+            #                                 'init': False}
+
+            # self.model_params["gas_logz"].pop("depends_on")
+
+            self.model_params.update(TemplateLibrary["nebular_marginalization"])
+
+            # # no NOT use cloudy line prior
+            # self.model_params['use_eline_prior'] = {'N': 1,
+            #                                         'is_free': False,
+            #                                         'init': False}
+
+            # self.model_params['eline_sigma'] = {"N": 1,
+            #                             "isfree": True,
+            #                             "init": 1000.0,
+            #                             "prior": priors.TopHat(mini=300, maxi=4000)}
+
+            to_fit = list(run_params["elines_to_fit"].keys())
+            to_fit_exist = np.array(to_fit.copy())
+            # ['[S III] 3722', '[O II] 3726', '[O II] 3729', 'Ba-7 3835', 'Ba-6 3889', \
+            #         'Ba-5 3970','Ba-delta 4101.76A', 'Ba-gamma 4341', '[O III] 4363', 'He I 4471.49A', \
+            #             '[C  I] 4621', '[Ne IV] 4720', '[O III] 4959', '[O III] 5007', \
+            #             '[N II] 6548', '[N II] 6584']
+
+            # emi_wavelengths = [line for line in list(run_params["elines_to_fit"].values())]
+
+            # obs_wave_mask = obs['wavelength'][obs['mask']]
+            # obs_spec_mask = obs['spectrum'][obs['mask']]
+            # obs_unc_mask = obs['unc'][obs['mask']]
+
+            # for i, w_emi in enumerate(emi_wavelengths):
+            #     wave_emi = obs_wave_mask[abs((obs_wave_mask/(1+redshift) - w_emi)/w_emi) < 10_000/3e5]
+            #     spec_emi = obs_spec_mask[abs((obs_wave_mask/(1+redshift) - w_emi)/w_emi) < 10_000/3e5]
+            #     unc_emi  = obs_unc_mask[abs((obs_wave_mask/(1+redshift) - w_emi)/w_emi) < 10_000/3e5]
+
+            #     print(wave_emi, spec_emi, unc_emi)
+            #     if len(wave_emi) < 5:
+            #         print('remove', str(to_fit[i]), 'due to no pixels, pixel num=', str(len(wave_emi)))
+            #         to_fit_exist.remove(to_fit[i])
+            #         # keep in mind that the length of "to_fit_exist" changes with the for loop
+
+            #     elif len(spec_emi[np.isnan(spec_emi)]) > 0 or len(unc_emi[np.isnan(unc_emi)]) > 0 or len(unc_emi[unc_emi == 0]) > 0 \
+            #             or len(spec_emi[spec_emi < 0]) > 0 or len(unc_emi[unc_emi <=0]) > 0:
+            #         print('remove', str(to_fit[i]), 'due to BAD pixels')
+            #         to_fit_exist.remove(to_fit[i])
+
+            self.model_params["elines_to_fit"]["init"] = to_fit_exist
+            self.model_params["eline_sigma"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1e3,  # np.array([10**6.5 for _ in range(nbins)]),
+                "units": "eline sigma",
+                "prior": priors.TopHat(mini=200.0, maxi=2000.0),
+            }
+            # eline_prior_width
+
+            # One per Line
+            if fit_eline_redshift:
+                self.model_params["fit_eline_redshift"] = {
+                    "N": 1,
+                    "isfree": False,
+                    "init": True,
+                }
+                self.model_params["eline_delta_zred"] = {
+                    "N": len(to_fit),
+                    "isfree": True,
+                    "init": np.array(
+                        [100 for _ in range(len(to_fit))]
+                    ),  # np.array([10**6.5 for _ in range(nbins)]),
+                    "units": "eline sigma",
+                    "prior": priors.TopHat(
+                        mini=np.array([0 for _ in range(len(to_fit))]),
+                        maxi=np.array([500 for _ in range(len(to_fit))]),
+                    ),
+                }
+            pass

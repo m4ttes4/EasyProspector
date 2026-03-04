@@ -112,7 +112,7 @@ class ProspectorSPSBuilder:
         """
         zred = self.config.redshift if self.config.redshift is not None else 0.0
         lightspeed = 2.998e5  # km/s
-
+        logger.debug(f"Redshift in config for LSF: {zred}")
         # Filter out zero or negative instrumental dispersion values
         valid_dispersion = sigma_v > 0
         wave_obs_clean = wave_obs[valid_dispersion]
