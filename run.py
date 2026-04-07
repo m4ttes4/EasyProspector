@@ -5,7 +5,7 @@ from copy import deepcopy
 
 from config import FitConfig
 from data_reader import GalaxyDataManager
-from models import BaseModel, show_model, ContinuitySFH
+from models import BaseModel, show_model, ContinuitySFH, AmirModel
 from sps import ProspectorSPSBuilder
 from prospect.utils.obsutils import fix_obs
 from prospect.models import PolySpecModel, AGNSpecModel
@@ -92,7 +92,8 @@ def run_fitting_pipeline(config, rank=0, galaxy_name="test"):
         data.load_data()
 
         # 2. Model Setup
-        model = ContinuitySFH(config)#BaseModel(config)
+        # model = ContinuitySFH(config)#BaseModel(config)
+        model = AmirModel(config)
 
         # Prevent 50 nodes from printing the same table simultaneously
         if getattr(config, "verbose", False): #and rank == 0:

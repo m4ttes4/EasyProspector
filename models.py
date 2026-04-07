@@ -2,6 +2,7 @@ from typing import Dict, Any
 import numpy as np
 from prospect.models import priors, transforms
 from prospect.models.templates import TemplateLibrary, adjust_continuity_agebins
+from astropy.cosmology import Planck18
 
 import logging
 import rich.box
@@ -1161,6 +1162,222 @@ class ContinuitySFH(ProspectorModelBuilder):
                         maxi=np.array([500 for _ in range(len(to_fit))]),
                     ),
                 }
+
+
+class AmirModel(ProspectorModelBuilder):
+    """
+    Prospector model matching the externally provided Amir specification.
+    """
+
+    ADD_EM_NEB = False
+    ADD_EM_DUST = True
+    MASS_INIT = 10.2
+    MASS_STD = 2
+    ZDELTA = 0.5
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        zred = getattr(config, "redshift", None)
+        if zred is None:
+            raise ValueError("redshift must be specified for AmirModel")
+
+        add_duste = getattr(config, "add_duste", self.ADD_EM_DUST)
+        add_nebular = getattr(config, "add_nebular", self.ADD_EM_NEB)
+        add_agn = getattr(config, "add_agn", False)
+        z_is_free = not getattr(config, "fixed_z", False)
+
+        self.model_params["zred"] = {
+            "N": 1,
+            "isfree": z_is_free,
+            "init": zred,
+            "units": "redshift",
+            "prior": priors.TopHat(
+                mini=zred - self.ZDELTA,
+                maxi=zred + self.ZDELTA,
+            ),
+        }
+
+        self.model_params["logzsol"] = {
+            "N": 1,
+            "isfree": True,
+            "init": -0.5,
+            "units": r"$\log (Z/Z_\odot)$",
+            "prior": priors.TopHat(mini=-2, maxi=0.50),
+        }
+
+        self.model_params["logt_wmb_hot"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 8.0,
+            "units": r"$\log (Z/Z_\odot)$",
+            "prior": priors.TopHat(mini=6, maxi=10),
+        }
+
+        self.model_params["f_outlier_phot"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 0.00,
+            "prior": priors.TopHat(mini=0.0, maxi=0.3),
+        }
+
+        self.model_params["nsigma_outlier_phot"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 50.0,
+        }
+
+        tuniv = Planck18.age(zred).value
+        agelims_myr = np.append(
+            np.logspace(np.log10(30.0), np.log10(0.8 * tuniv * 1000), 12),
+            [0.9 * tuniv * 1000, tuniv * 1000],
+        )
+        agelims = np.concatenate(([0.0], np.log10(agelims_myr * 1e6)))
+        agebins = np.array([agelims[:-1], agelims[1:]]).T
+        nbins = len(agelims) - 1
+
+        self.model_params["logmass"] = {
+            "N": 1,
+            "isfree": True,
+            "init": self.MASS_INIT,
+            "units": "Solar masses formed",
+            "prior": priors.TopHat(
+                mini=self.MASS_INIT - self.MASS_STD,
+                maxi=self.MASS_INIT + self.MASS_STD,
+            ),
+        }
+
+        self.model_params["mass"] = {
+            "N": nbins,
+            "isfree": False,
+            "init": (10 ** 10.5) / nbins,
+            "units": "Solar masses formed",
+            "depends_on": transforms.logsfr_ratios_to_masses,
+        }
+
+        self.model_params["agebins"] = {
+            "N": nbins,
+            "isfree": False,
+            "init": agebins,
+            "units": "log(yr)",
+        }
+
+        self.model_params["logsfr_ratios"] = {
+            "N": nbins - 1,
+            "isfree": True,
+            "init": np.full(nbins - 1, 0.0),
+            "units": "",
+            "prior": priors.StudentT(
+                mean=np.full(nbins - 1, 0.0),
+                scale=np.full(nbins - 1, 0.3),
+                df=np.full(nbins - 1, 2),
+            ),
+        }
+
+        self.model_params["imf_type"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 1,
+            "units": "FSPS index",
+            "prior": None,
+        }
+
+        self.model_params["dust_type"] = {
+            "N": 1,
+            "isfree": False,
+            "init": 4,
+            "units": "FSPS index",
+        }
+
+        self.model_params["dust2"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 1.0,
+            "units": "optical depth at 5500AA",
+            "prior": priors.TopHat(mini=0.0, maxi=4.0 / 1.086),
+        }
+
+        self.model_params["dust_index"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 0.0,
+            "units": "power-law multiplication of Calzetti",
+            "prior": priors.ClippedNormal(
+                mini=-1.5,
+                maxi=0.4,
+                mean=0.0,
+                sigma=0.1,
+            ),
+        }
+
+        self.model_params["dust1"] = {
+            "N": 1,
+            "isfree": False,
+            "depends_on": transforms.dustratio_to_dust1,
+            "init": 0,
+            "units": "optical depth towards young stars",
+            "prior": None,
+        }
+
+        self.model_params["dust1_fraction"] = {
+            "N": 1,
+            "isfree": True,
+            "init": 1.0,
+            "prior": priors.ClippedNormal(
+                mini=0.0,
+                maxi=2.0,
+                mean=1.0,
+                sigma=0.1,
+            ),
+        }
+
+        if add_duste:
+            self.model_params.update(TemplateLibrary["dust_emission"])
+            self.model_params["duste_gamma"]["isfree"] = True
+            self.model_params["duste_gamma"]["init"] = 0.1
+            self.model_params["duste_gamma"]["prior"] = priors.TopHat(
+                mini=0.0,
+                maxi=1.0,
+            )
+
+            self.model_params["duste_qpah"]["isfree"] = True
+            self.model_params["duste_qpah"]["init"] = 3.0
+            self.model_params["duste_qpah"]["prior"] = priors.TopHat(
+                mini=0.5,
+                maxi=10.0,
+            )
+
+            self.model_params["duste_umin"]["isfree"] = True
+            self.model_params["duste_umin"]["init"] = 1.0
+            self.model_params["duste_umin"]["prior"] = priors.TopHat(
+                mini=0.1,
+                maxi=25.0,
+            )
+
+        if add_agn:
+            self.model_params.update(TemplateLibrary["agn"])
+            self.model_params["fagn"]["isfree"] = True
+            self.model_params["fagn"]["prior"] = priors.LogUniform(
+                mini=1e-5,
+                maxi=3.0,
+            )
+            self.model_params["agn_tau"]["isfree"] = True
+            self.model_params["agn_tau"]["prior"] = priors.LogUniform(
+                mini=5.0,
+                maxi=150.0,
+            )
+
+        if add_nebular:
+            self.model_params.update(TemplateLibrary["nebular"])
+            self.model_params["gas_logu"]["isfree"] = True
+            self.model_params["gas_logz"]["isfree"] = True
+            self.model_params["nebemlineinspec"] = {
+                "N": 1,
+                "isfree": False,
+                "init": True,
+            }
+            self.model_params["gas_logz"].pop("depends_on", None)
 # class ContinuitySFH(ProspectorModelBuilder):
 #     def __init__(self, run_params, obs=None):
 #         super().__init__()
