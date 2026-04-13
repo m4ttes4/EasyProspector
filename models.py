@@ -1169,7 +1169,7 @@ class AmirModel(ProspectorModelBuilder):
     Prospector model matching the externally provided Amir specification.
     """
 
-    ADD_EM_NEB = False
+    ADD_EM_NEB = True
     ADD_EM_DUST = True
     MASS_INIT = 10.2
     MASS_STD = 2
@@ -1187,7 +1187,9 @@ class AmirModel(ProspectorModelBuilder):
         add_nebular = getattr(config, "add_nebular", self.ADD_EM_NEB)
         add_agn = getattr(config, "add_agn", False)
         z_is_free = not getattr(config, "fixed_z", False)
-
+        fit_spec = config.use_spectroscopy
+        
+        
         self.model_params["zred"] = {
             "N": 1,
             "isfree": z_is_free,
@@ -1368,16 +1370,74 @@ class AmirModel(ProspectorModelBuilder):
                 maxi=150.0,
             )
 
+        # if add_nebular:
+        #     self.model_params.update(TemplateLibrary["nebular"])
+        #     self.model_params["gas_logu"]["isfree"] = True
+        #     self.model_params["gas_logz"]["isfree"] = True
+        #     self.model_params["nebemlineinspec"] = {
+        #         "N": 1,
+        #         "isfree": False,
+        #         "init": True,
+        #     }
+        #     self.model_params["gas_logz"].pop("depends_on", None)
+        
+        if fit_spec:
+            self.model_params.update(TemplateLibrary["spectral_smoothing"])
+            self.model_params["sigma_smooth"] = {
+                "N": 1,
+                "init": 1000.0,
+                "isfree": True,
+                "units": "Km/s",
+                "prior": priors.TopHat(mini=200.0, maxi=2000.0),
+            }
+
+            self.model_params.update(TemplateLibrary["optimize_speccal"])
+            self.model_params["polyorder"] = {"N": 1, "isfree": False, "init": 10}
+            self.model_params["spec_norm"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1,
+                "units": "f_true/f_obs",
+                "prior": priors.Normal(mean=1.0, sigma=0.1),
+            }
+            self.model_params["spec_jitter"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 1,
+                "prior": priors.TopHat(mini=-0.5, maxi=5),
+            }
+        
         if add_nebular:
             self.model_params.update(TemplateLibrary["nebular"])
-            self.model_params["gas_logu"]["isfree"] = True
-            self.model_params["gas_logz"]["isfree"] = True
             self.model_params["nebemlineinspec"] = {
                 "N": 1,
                 "isfree": False,
-                "init": True,
+                "init": False,
             }
-            self.model_params["gas_logz"].pop("depends_on", None)
+            self.model_params["eline_sigma"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 150.0,
+                "units": "km/s",
+                "prior": priors.TopHat(mini=50, maxi=3000),
+            }
+            self.model_params["gas_logz"] = {
+                "N": 1,
+                "isfree": True,
+                "init": 0.0,
+                "units": "log Z/Zsun",
+                "prior": priors.TopHat(mini=-2, maxi=0.5),
+            }
+            self.model_params["gas_logu"] = {
+                "N": 1,
+                "isfree": True,
+                "init": -2.0,
+                "units": "Q_H/N_H",
+                "prior": priors.TopHat(mini=-4, maxi=-1),
+            }
+            
+
+            
 # class ContinuitySFH(ProspectorModelBuilder):
 #     def __init__(self, run_params, obs=None):
 #         super().__init__()
