@@ -55,7 +55,11 @@ def show_data_summary(obs: dict):
             # Evitiamo divisioni per zero
             snr_phot = np.divide(valid_flux, valid_unc, out=np.zeros_like(valid_flux), where=valid_unc!=0)
             med_snr_phot = f"{np.nanmedian(snr_phot):.1f}"
-            wave_range_phot = f"{np.nanmin(phot_wave):.0f} - {np.nanmax(phot_wave):.0f}"
+            wave_range_phot = (
+                f"{np.nanmin(phot_wave):.0f} - {np.nanmax(phot_wave):.0f}"
+                if len(phot_wave)
+                else "N/A"
+            )
         else:
             med_flux_phot = "N/A"
             med_snr_phot = "N/A"
@@ -90,7 +94,11 @@ def show_data_summary(obs: dict):
             # Evitiamo divisioni per zero
             snr_spec = np.divide(valid_flux_spec, valid_unc_spec, out=np.zeros_like(valid_flux_spec), where=valid_unc_spec!=0)
             med_snr_spec = f"{np.nanmedian(snr_spec):.1f}"
-            wave_range_spec = f"{np.nanmin(spec_wave):.0f} - {np.nanmax(spec_wave):.0f}"
+            wave_range_spec = (
+                f"{np.nanmin(spec_wave):.0f} - {np.nanmax(spec_wave):.0f}"
+                if len(spec_wave)
+                else "N/A"
+            )
         else:
             med_flux_spec = "N/A"
             med_snr_spec = "N/A"
@@ -196,7 +204,7 @@ class GalaxyDataManager:
             logger.error(f"File not found: {self.filepath}")
             raise FileNotFoundError(f"Data file does not exist: {self.filepath}")
 
-        logger.info(f"Opening HDF5 file: {self.filepath}")
+        logger.info("Input | open %s", self.filepath)
 
         with h5py.File(self.filepath, "r") as h5_file:
             if self.version not in h5_file:
@@ -211,33 +219,35 @@ class GalaxyDataManager:
             # --- Photometry ---
             if self.config.use_photometry:
                 if "Photometry" in version_group:
-                    logger.info("Extracting photometric data...")
+                    logger.info("Data | photometry")
                     self.photometry = self._extract_to_memory(
                         version_group["Photometry"]
                     )
                     self._validate_photometry()
                     self._build_photometric_filters()
                 else:
-                    logger.warning(
-                        "Photometry requested by config, but not found in the HDF5 file."
+                    raise ValueError(
+                        "Photometry is enabled, but group "
+                        f"'{self.version}/Photometry' is missing from {self.filepath}."
                     )
 
             # --- Spectroscopy ---
             if self.config.use_spectroscopy:
                 if "Spectroscopy" in version_group:
-                    logger.info("Extracting spectroscopic data...")
+                    logger.info("Data | spectroscopy")
                     self.spectroscopy = self._extract_to_memory(
                         version_group["Spectroscopy"]
                     )
                     self._validate_spectroscopy()
                 else:
-                    logger.warning(
-                        "Spectroscopy requested by config, but not found in the HDF5 file."
+                    raise ValueError(
+                        "Spectroscopy is enabled, but group "
+                        f"'{self.version}/Spectroscopy' is missing from {self.filepath}."
                     )
 
             # --- Metadata ---
             if "Metadata" in version_group:
-                logger.info("Extracting metadata...")
+                logger.info("Data | metadata")
                 self.metadata = self._extract_to_memory(version_group["Metadata"])
                 logger.debug(f"Metadata found: {list(self.metadata.keys())}")
 
@@ -245,7 +255,53 @@ class GalaxyDataManager:
             else:
                 logger.debug("No 'Metadata' group found in the file.")
 
-        logger.info("Data loading and validation completed successfully.")
+        logger.info("Data | validated")
+
+    def _require_keys(self, component: str, data: Dict[str, Any], keys):
+        missing = [key for key in keys if key not in data]
+        if missing:
+            raise ValueError(
+                f"{component} is missing required dataset(s): {', '.join(missing)}."
+            )
+
+    def _as_1d_array(self, component: str, name: str, value):
+        array = np.asarray(value)
+        if array.ndim != 1:
+            raise ValueError(
+                f"{component}/{name} must be a 1D dataset; got shape {array.shape}."
+            )
+        if len(array) == 0:
+            raise ValueError(f"{component}/{name} cannot be empty.")
+        return array
+
+    def _validate_same_length(self, component: str, arrays: Dict[str, np.ndarray]):
+        lengths = {name: len(value) for name, value in arrays.items()}
+        expected = next(iter(lengths.values()))
+        mismatched = {
+            name: length for name, length in lengths.items() if length != expected
+        }
+        if mismatched:
+            details = ", ".join(f"{name}={length}" for name, length in lengths.items())
+            raise ValueError(f"{component} datasets must have matching lengths: {details}.")
+
+    def _require_numeric(self, component: str, arrays: Dict[str, np.ndarray]):
+        for name, array in arrays.items():
+            if not np.issubdtype(array.dtype, np.number):
+                raise ValueError(f"{component}/{name} must be numeric; got {array.dtype}.")
+
+    def _validate_mask(self, component: str, mask_value, n_elements: int):
+        mask = self._as_1d_array(component, "mask", mask_value)
+        if len(mask) != n_elements:
+            raise ValueError(
+                f"{component} mask length ({len(mask)}) differs from data length ({n_elements})."
+            )
+        if mask.dtype == np.bool_:
+            return mask.astype(bool, copy=False)
+        if np.issubdtype(mask.dtype, np.integer):
+            values = np.unique(mask)
+            if np.all(np.isin(values, [0, 1])):
+                return mask.astype(bool)
+        raise ValueError(f"{component}/mask must contain only boolean or 0/1 values.")
 
     def _extract_to_memory(self, h5_object) -> Dict[str, Any]:
         """Recursively convert HDF5 datasets into a dictionary of numpy arrays in RAM."""
@@ -262,27 +318,27 @@ class GalaxyDataManager:
 
     def _validate_photometry(self):
         """Check photometry consistency and apply optional filters."""
-        if not self.photometry:
+        if self.photometry is None:
             return
 
         logger.debug("Starting photometry validation and mask generation...")
-        req_keys = ["flux", "flux_err", "filters"]
-        for k in req_keys:
-            if k not in self.photometry:
-                logger.error(f"Corrupted photometry: missing key '{k}'.")
-                raise ValueError(f"Corrupted photometric data: missing key '{k}'.")
+        self._require_keys("Photometry", self.photometry, ["flux", "flux_err", "filters"])
 
-        flux = self.photometry["flux"]
-        flux_err = self.photometry["flux_err"]
+        flux = self._as_1d_array("Photometry", "flux", self.photometry["flux"])
+        flux_err = self._as_1d_array("Photometry", "flux_err", self.photometry["flux_err"])
+        filters = self._as_1d_array("Photometry", "filters", self.photometry["filters"])
+        self._validate_same_length(
+            "Photometry", {"flux": flux, "flux_err": flux_err, "filters": filters}
+        )
+        self._require_numeric("Photometry", {"flux": flux, "flux_err": flux_err})
+        self.photometry["flux"] = flux
+        self.photometry["flux_err"] = flux_err
+        self.photometry["filters"] = filters
         n_elements = len(flux)
 
         if self.config.use_mask and "mask" in self.photometry:
             logger.debug("Using photometric mask from the HDF5 file.")
-            mask = np.array(self.photometry["mask"], dtype=bool)
-            if len(mask) != n_elements:
-                raise ValueError(
-                    f"Photometric mask length ({len(mask)}) differs from data length ({n_elements})."
-                )
+            mask = self._validate_mask("Photometry", self.photometry["mask"], n_elements)
         else:
             logger.debug("Creating default photometric mask.")
             mask = np.ones(n_elements, dtype=bool)
@@ -293,12 +349,18 @@ class GalaxyDataManager:
             mask &= np.isfinite(flux_err)
             mask &= flux_err > 0
             mask &= flux > 0
-            # phot_mask = [
-            #     True
-            #     if flux[i] > 0 or ~np.isfinite(flux[i])
-            #     else False
-            #     for i in range(len(flux))
-            # ]
+        elif not (
+            np.all(np.isfinite(flux))
+            and np.all(np.isfinite(flux_err))
+            and np.all(flux_err > 0)
+        ):
+            raise ValueError(
+                "Photometry contains non-finite fluxes or non-positive uncertainties; "
+                "enable filter_photo to mask invalid points."
+            )
+
+        if not np.any(mask):
+            raise ValueError("Photometry has no valid points after validation.")
 
         self.photometry["mask"] = mask
         logger.debug(
@@ -307,28 +369,31 @@ class GalaxyDataManager:
 
     def _validate_spectroscopy(self):
         """Check spectroscopy consistency and apply optional filters."""
-        if not self.spectroscopy:
+        if self.spectroscopy is None:
             return
 
         logger.debug("Starting spectroscopy validation and mask generation...")
-        req_keys = ["wavelength", "flux", "flux_err"]
-        for k in req_keys:
-            if k not in self.spectroscopy:
-                logger.error(f"Corrupted spectroscopy: missing key '{k}'.")
-                raise ValueError(f"Corrupted spectroscopic data: missing key '{k}'.")
+        self._require_keys(
+            "Spectroscopy", self.spectroscopy, ["wavelength", "flux", "flux_err"]
+        )
 
-        wave = self.spectroscopy["wavelength"]
-        flux = self.spectroscopy["flux"]
-        flux_err = self.spectroscopy["flux_err"]
+        wave = self._as_1d_array("Spectroscopy", "wavelength", self.spectroscopy["wavelength"])
+        flux = self._as_1d_array("Spectroscopy", "flux", self.spectroscopy["flux"])
+        flux_err = self._as_1d_array("Spectroscopy", "flux_err", self.spectroscopy["flux_err"])
+        self._validate_same_length(
+            "Spectroscopy", {"wavelength": wave, "flux": flux, "flux_err": flux_err}
+        )
+        self._require_numeric(
+            "Spectroscopy", {"wavelength": wave, "flux": flux, "flux_err": flux_err}
+        )
+        self.spectroscopy["wavelength"] = wave
+        self.spectroscopy["flux"] = flux
+        self.spectroscopy["flux_err"] = flux_err
         n_elements = len(flux)
 
         if self.config.use_mask and "mask" in self.spectroscopy:
             logger.debug("Using spectroscopic mask from the HDF5 file.")
-            mask = np.array(self.spectroscopy["mask"], dtype=bool)
-            if len(mask) != n_elements:
-                raise ValueError(
-                    f"Spectroscopic mask length ({len(mask)}) differs from data length ({n_elements})."
-                )
+            mask = self._validate_mask("Spectroscopy", self.spectroscopy["mask"], n_elements)
         else:
             logger.debug("Creating default spectroscopic mask.")
             mask = np.ones(n_elements, dtype=bool)
@@ -340,6 +405,20 @@ class GalaxyDataManager:
             mask &= flux_err > 0
             mask &= np.isfinite(wave)
             mask &= wave > 0
+        elif not (
+            np.all(np.isfinite(wave))
+            and np.all(wave > 0)
+            and np.all(np.isfinite(flux))
+            and np.all(np.isfinite(flux_err))
+            and np.all(flux_err > 0)
+        ):
+            raise ValueError(
+                "Spectroscopy contains invalid wavelengths, fluxes, or uncertainties; "
+                "enable filter_spec to mask invalid points."
+            )
+
+        if not np.any(mask):
+            raise ValueError("Spectroscopy has no valid points after validation.")
 
         self.spectroscopy["mask"] = mask
         logger.debug(
@@ -348,7 +427,7 @@ class GalaxyDataManager:
 
     def _build_photometric_filters(self):
         """Convert filter names from the H5 file into sedpy.observate.Filter objects."""
-        if not self.photometry:
+        if self.photometry is None:
             return
 
         if observate is None:
@@ -387,7 +466,7 @@ class GalaxyDataManager:
         if not np.array_equal(sort_idx, original_idx):
             old_order = [filter_names[i] for i in original_idx]
             new_order = [filter_names[i] for i in sort_idx]
-            logger.info("Photometric filters were not sorted by wavelength. Reordering them now.")
+            logger.info("Data | photometry filters reordered by wavelength")
             logger.debug(f"Old order: {old_order}")
             logger.debug(f"New order: {new_order}")
 
@@ -428,31 +507,52 @@ class GalaxyDataManager:
             try:
                 z_file = float(z_file)
             except (ValueError, TypeError):
-                logger.warning(f"Invalid redshift value in file: {z_file}")
-                return
+                raise ValueError(f"Metadata/redshift is not numeric: {z_file!r}.")
+
+            if not np.isfinite(z_file) or z_file < 0:
+                raise ValueError(f"Metadata/redshift must be finite and >= 0; got {z_file}.")
 
             if self.config.redshift is None:
                 self.config.redshift = z_file
-                logger.info(
-                    f"Redshift automatically updated from metadata: z = {self.config.redshift:.4f}"
-                )
+                logger.info("Config | redshift %.4f from metadata", self.config.redshift)
             else:
-                logger.info(
-                    f"CLI redshift (z={self.config.redshift}) retained. Ignoring file z={z_file:.4f}."
-                )
+                logger.info("Config | redshift %.4f from CLI", self.config.redshift)
 
     def to_dict(self):
         observation = {
-            "wavelength": self.spectroscopy["wavelength"],
-            "spectrum": self.spectroscopy["flux"],
-            "unc": self.spectroscopy["flux_err"],
-            "mask": self.spectroscopy["mask"],
-            "filters": self.photometry["sedpy_filters"],
-            "maggies": self.photometry["flux"],
-            "maggies_unc": self.photometry["flux_err"],
-            "phot_mask": self.photometry["mask"],
-            "phot_wave": self.photometry["wave_effective"],
+            "wavelength": None,
+            "spectrum": None,
+            "unc": None,
+            "mask": None,
+            "filters": None,
+            "maggies": None,
+            "maggies_unc": None,
+            "phot_mask": None,
+            "phot_wave": None,
         }
+        if self.config.use_spectroscopy:
+            if self.spectroscopy is None:
+                raise ValueError("Spectroscopy is enabled but no spectroscopy data was loaded.")
+            observation.update(
+                {
+                    "wavelength": self.spectroscopy["wavelength"],
+                    "spectrum": self.spectroscopy["flux"],
+                    "unc": self.spectroscopy["flux_err"],
+                    "mask": self.spectroscopy["mask"],
+                }
+            )
+        if self.config.use_photometry:
+            if self.photometry is None:
+                raise ValueError("Photometry is enabled but no photometry data was loaded.")
+            observation.update(
+                {
+                    "filters": self.photometry["sedpy_filters"],
+                    "maggies": self.photometry["flux"],
+                    "maggies_unc": self.photometry["flux_err"],
+                    "phot_mask": self.photometry["mask"],
+                    "phot_wave": self.photometry["wave_effective"],
+                }
+            )
         return observation
 
 

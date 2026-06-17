@@ -1,6 +1,6 @@
 # Prospector SED Fitting Pipeline
 
-A Python pipeline for fitting galaxy spectral energy distributions (SEDs) using [Prospector](https://github.com/bd-j/prospector) with a non-parametric Continuity SFH model. Supports joint spectroscopy + photometry fitting, MPI parallelisation, and interactive spectrum masking.
+A Python pipeline for fitting galaxy spectral energy distributions (SEDs) using [Prospector](https://github.com/bd-j/prospector). The runtime default model is `AmirModel`, with `ContinuitySFH` and other registered models selectable through the CLI. Supports joint spectroscopy + photometry fitting, MPI parallelisation, and interactive spectrum masking.
 
 ---
 
@@ -20,10 +20,10 @@ A Python pipeline for fitting galaxy spectral energy distributions (SEDs) using 
 
 ## Overview
 
-The pipeline reads galaxy data from HDF5 files, builds a Prospector model (Continuity SFH by default), and runs nested sampling with Dynesty. It supports:
+The pipeline reads galaxy data from HDF5 files, builds a registered Prospector model, and runs nested sampling with Dynesty. It supports:
 
 - **Joint fitting** of photometry and spectroscopy
-- **Non-parametric Continuity SFH** with configurable number of age bins
+- **Registered model selection** with `AmirModel` by default and `ContinuitySFH` available via `--model ContinuitySFH`
 - **Nebular emission**, **dust emission**, **AGN**, and **birth-cloud dust** components
 - **Instrumental LSF** correction using a JWST dispersion FITS file
 - **Emission line marginalization**
@@ -76,6 +76,7 @@ galaxy.h5
 > - Filter names must be valid `sedpy` filter identifiers.
 > - If a `redshift` is found in `Metadata`, it is used automatically unless `--redshift` is passed on the command line (CLI takes priority).
 > - `mask` datasets are optional. If absent, all pixels are treated as valid.
+> - Requested components must exist. For example, use `--no-spectroscopy` for photometry-only files.
 
 ---
 
@@ -84,8 +85,10 @@ galaxy.h5
 **Fit a single galaxy (photometry + spectroscopy):**
 
 ```bash
-python run.py --file data/galaxy_A.h5
+python run.py --file data/galaxy_A.h5 --redshift 1.23
 ```
+
+`AmirModel` is the default model and requires a redshift from `--redshift` or `V1/Metadata/redshift`.
 
 **Fit with a known redshift, disabling spectroscopy:**
 
@@ -135,10 +138,16 @@ Launches a matplotlib GUI where you can drag to mask spectral regions and option
 python run.py --file data/galaxy_D.h5 --interactive
 ```
 
+### Select a model
+
+```bash
+python run.py --file data/galaxy_A.h5 --model ContinuitySFH
+```
+
 ### Log to file instead of terminal
 
 ```bash
-python run.py --file data/galaxy_A.h5 --logging_file --log_folder results/logs
+python run.py --file data/galaxy_A.h5 --log-to-file --log-folder results/logs
 ```
 
 ### Batch mode with MPI (one galaxy per rank)
@@ -164,12 +173,12 @@ All options can be set via the command line. Boolean flags follow a `--flag` / `
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `--file` | `str` | — | Path to a single HDF5 input file |
-| `--file_list` | `str` | — | Path to a text file listing HDF5 paths (one per line) |
-| `--out_folder` | `str` | `results/out` | Directory for output `.h5` result files |
+| `--file-list` / `--file_list` | `str` | — | Path to a text file listing HDF5 paths (one per line) |
+| `--out-folder` / `--out_folder` | `str` | `results/out` | Directory for output `.h5` result files |
 | `--version` | `str` | `V1` | Version group name inside the HDF5 file |
 | `--ext` | `str` | — | Optional suffix appended to the output filename |
-| `--log_folder` | `str` | `results/log` | Directory for log files (requires `--logging_file`) |
-| `--logging_file` | flag | `False` | Write logs to a per-galaxy file instead of the terminal |
+| `--log-folder` / `--log_folder` | `str` | `results/log` | Directory for log files (requires `--log-to-file`) |
+| `--log-to-file` / `--logging_file` | flag | `False` | Write logs to a per-galaxy file instead of the terminal |
 
 ### Data Selection
 
@@ -185,10 +194,11 @@ All options can be set via the command line. Boolean flags follow a `--flag` / `
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
+| `--model` / `--model-type` / `--model_type` | `str` | `AmirModel` | Registered model name. Built-ins include `AmirModel` and `ContinuitySFH` |
 | `--redshift` | `float` | — | Galaxy redshift (overrides metadata value in HDF5) |
-| `--fixed_z` / `--no-fixed_z` | flag | `False` | Fix metallicity (`logzsol`) instead of fitting it |
+| `--fixed-z` / `--fixed_z` | flag | `False` | Fix redshift (`zred`) instead of fitting it |
 | `--nbins` | `int` | `8` | Number of age bins in the Continuity SFH |
-| `--z_continuous` | `int` | `1` | FSPS `zcontinuous` parameter |
+| `--z-continuous` / `--z_continuous` | `int` | `1` | FSPS `zcontinuous` parameter |
 | `--nebular` / `--no-nebular` | flag | `True` | Include nebular emission |
 | `--duste` / `--no-duste` | flag | `True` | Include dust emission (IR) |
 | `--dust1` / `--no-dust1` | flag | `True` | Include birth-cloud dust (`dust1`) |
@@ -210,6 +220,7 @@ All options can be set via the command line. Boolean flags follow a `--flag` / `
 |---|---|---|---|
 | `--interactive` / `--no-interactive` | flag | `False` | Open interactive masking GUI before fitting |
 | `--verbose` / `--no-verbose` | flag | `True` | Print model parameters and data summary tables |
+| `--debug` / `--no-debug` | flag | `False` | Enable debug-level logs |
 
 ---
 
@@ -248,6 +259,6 @@ The output HDF5 contains the full Dynesty sampling chain, model parameters, and 
 | `run.py` | Entry point — MPI setup, CLI parsing, orchestrates the fitting pipeline |
 | `config.py` | `FitConfig` dataclass — all configuration options and CLI argument parsing |
 | `data_reader.py` | `GalaxyDataManager` — HDF5 reading, mask generation, sedpy filter building |
-| `models.py` | `ContinuitySFH`, `BaseModel` — Prospector model parameter construction |
+| `models.py` | Model registry plus concrete Prospector model parameter builders |
 | `sps.py` | `ProspectorSPSBuilder` — SPS object initialisation and JWST LSF injection |
 | `utils.py` | Interactive masking GUI, spectrum plotting utilities |

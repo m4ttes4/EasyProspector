@@ -105,7 +105,9 @@ def interactive_masking(config, data_dict):
     
     # Inizializza la maschera con quella esistente nel data_dict, se presente
     if "mask" in data_dict and data_dict["mask"] is not None:
-        initial_mask = mask = np.ones(n_elements, dtype=bool)#np.copy(data_dict["mask"])
+        initial_mask = np.asarray(data_dict["mask"], dtype=bool).copy()
+        if len(initial_mask) != n_elements:
+            raise ValueError("Interactive mask length does not match the spectrum length.")
     else:
         initial_mask = np.ones_like(wavelengths, dtype=bool)
         

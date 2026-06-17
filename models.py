@@ -1020,8 +1020,6 @@ class ContinuitySFH(ProspectorModelBuilder):
             "units": r"$\log (Z/Z_\odot)$",
             "prior": priors.TopHat(mini=-2, maxi=0.50),
         }
-        if fixed_z:
-            self.model_params["logzsol"]["isfree"] = False
 
         self.model_params["imf_type"] = {
             "N": 1,
@@ -1087,7 +1085,7 @@ class ContinuitySFH(ProspectorModelBuilder):
         if has_z:
             self.model_params["zred"] = {
                 "N": 1,
-                "isfree": True,
+                "isfree": not fixed_z,
                 "init": z,
                 "units": "redshift",
                 "prior": priors.ClippedNormal(
@@ -1798,3 +1796,61 @@ class AmirModel(ProspectorModelBuilder):
 #                     ),
 #                 }
 #             pass
+
+
+MODEL_REGISTRY = {}
+MODEL_ALIASES = {}
+MODEL_REQUIRES_REDSHIFT = {}
+
+
+def register_model(name, model_cls, aliases=(), requires_redshift=False):
+    """Register a model builder class behind a small, stable selection seam."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Model registry name must be a non-empty string.")
+    if not issubclass(model_cls, ProspectorModelBuilder):
+        raise TypeError("Registered models must inherit ProspectorModelBuilder.")
+
+    canonical = name.strip()
+    MODEL_REGISTRY[canonical] = model_cls
+    MODEL_REQUIRES_REDSHIFT[canonical] = requires_redshift
+
+    for alias in (canonical, *aliases):
+        MODEL_ALIASES[alias.lower()] = canonical
+
+    return model_cls
+
+
+def available_models():
+    """Return registered model names for CLI help and validation messages."""
+    return tuple(MODEL_REGISTRY.keys())
+
+
+def resolve_model_name(name):
+    try:
+        return MODEL_ALIASES[name.lower()]
+    except (AttributeError, KeyError) as exc:
+        choices = ", ".join(available_models())
+        raise ValueError(f"Unknown model '{name}'. Available models: {choices}.") from exc
+
+
+def model_requires_redshift(name):
+    return MODEL_REQUIRES_REDSHIFT[resolve_model_name(name)]
+
+
+def build_model(config):
+    """Build the configured Prospector model without hard-coding one template."""
+    canonical = resolve_model_name(config.model_type)
+    if MODEL_REQUIRES_REDSHIFT[canonical] and config.redshift is None:
+        raise ValueError(f"Model '{canonical}' requires a redshift from CLI or metadata.")
+    model = MODEL_REGISTRY[canonical](config)
+    logger.info("Model | %s", canonical)
+    return model
+
+
+register_model("BaseModel", BaseModel, aliases=("base",))
+register_model(
+    "ContinuitySFH",
+    ContinuitySFH,
+    aliases=("continuity", "continuity_sfh", "sfh"),
+)
+register_model("AmirModel", AmirModel, aliases=("amir",), requires_redshift=True)

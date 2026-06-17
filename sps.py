@@ -44,7 +44,11 @@ class ProspectorSPSBuilder:
             logger.error("Prospector model lacks both 'agebins' and 'tau'.")
             raise ValueError("Model parameters must include either 'agebins' or 'tau'.")
 
-        if self.config.add_sigmav and ("agebins" in self.model.model_params):
+        if (
+            self.config.add_sigmav
+            and self.config.use_spectroscopy
+            and ("agebins" in self.model.model_params)
+        ):
             if self.config.dispersion_file is not None:
                 self._apply_smoothing(sps)
             else:
@@ -89,6 +93,9 @@ class ProspectorSPSBuilder:
 
         logger.debug(f"Reading LSF dispersion file: {disp_file}")
         try:
+            if self.data_handler.spectroscopy is None:
+                raise ValueError("Cannot apply LSF without loaded spectroscopy data.")
+
             wave_obs = self.data_handler.spectroscopy["wavelength"]
             # DEBUG LSF DIAGNOSTICS: inspect the observed wavelength grid
             logger.debug(
@@ -117,6 +124,13 @@ class ProspectorSPSBuilder:
 
         logger.debug("Computing LSF forcing the MILES library.")
         wave_lsf, delta_v = self._get_lsf(wave_obs, sigma_v)
+        if len(wave_lsf) == 0 or len(delta_v) == 0:
+            raise ValueError(
+                "LSF application produced no valid wavelengths in the MILES domain."
+            )
+        if not (np.all(np.isfinite(wave_lsf)) and np.all(np.isfinite(delta_v))):
+            raise ValueError("LSF arrays contain non-finite values.")
+
         # DEBUG LSF DIAGNOSTICS: final arrays passed to fsps
         logger.debug(
             "LSF arrays after filtering: "
@@ -141,7 +155,9 @@ class ProspectorSPSBuilder:
         lightspeed = 2.998e5  # km/s
         logger.debug(f"Redshift in config for LSF: {zred}")
         # Filter out zero or negative instrumental dispersion values
-        valid_dispersion = sigma_v > 0
+        valid_dispersion = np.isfinite(sigma_v) & (sigma_v > 0)
+        if not np.any(valid_dispersion):
+            raise ValueError("No finite positive instrumental dispersion values found.")
         # DEBUG LSF DIAGNOSTICS: identify how many points survive the first cut
         logger.debug(
             "LSF valid dispersion points: "
