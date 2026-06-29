@@ -75,9 +75,9 @@ class FitConfig:
 
     dynesty_kwargs: Dict[str, Any] = field(
         default_factory=lambda: {
-            "nested_nlive_init": 300,
+            "nested_nlive_init": 600,
             "nested_sample": "rwalk",
-            "nested_target_n_effective": 300,
+            "nested_target_n_effective": 1000,
             "nested_dlogz_init": 0.01,
         }
     )
