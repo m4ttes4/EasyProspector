@@ -997,7 +997,8 @@ class ContinuitySFH(ProspectorModelBuilder):
         # 5. CONTINUITY SFH  (must come after nebular to avoid key conflicts)
         # ------------------------------------------------------------------
         self.model_params.update(TemplateLibrary["continuity_sfh"])
-        tuniv = 13.7
+        # tuniv = età dell'universo AL redshift della galassia (non z=0)
+        tuniv = Planck18.age(z).value if has_z else 13.7
         self.model_params.update(
             adjust_continuity_agebins(self.model_params, tuniv=tuniv, nbins=nbins)
         )
